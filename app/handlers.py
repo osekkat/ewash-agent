@@ -136,20 +136,19 @@ async def _handle_book_model(phone, sess, text=None, **kw):
         return
     sess.booking.car_model = text.strip()[:60]
     sess.state = "BOOK_COLOR"
-    await meta.send_buttons(phone, "Couleur du véhicule ?", list(catalog.COLORS))
-    # Note: WhatsApp caps at 3 buttons → Blanc/Noir/Gris shown.
-    # Any other color: user just types it and we'll accept free text below.
+    await meta.send_text(
+        phone,
+        "Quelle est la *couleur* du véhicule ? (ex: *Blanc*, *Gris métallisé*, *Rouge bordeaux*)",
+    )
 
 
 async def _handle_book_color(phone, sess, payload_id=None, text=None, **kw):
-    if payload_id in {row[0] for row in catalog.COLORS}:
-        sess.booking.color = catalog.label_for(catalog.COLORS, payload_id)
-    elif text and text.strip():
+    if text and text.strip():
         sess.booking.color = text.strip()[:30]
     else:
         await meta.send_text(
             phone,
-            "Choisissez une couleur (Blanc/Noir/Gris) ou tapez-la directement.",
+            "Merci d'indiquer la couleur du véhicule (ex: *Blanc*, *Gris*, *Bleu nuit*).",
         )
         return
     sess.state = "BOOK_SERVICE"

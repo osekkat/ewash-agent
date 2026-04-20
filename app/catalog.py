@@ -46,12 +46,9 @@ SERVICES_MOTO = [
 
 
 # ── Colors ─────────────────────────────────────────────────────────────────
-# 3 quick-pick buttons. Anything else → user types free text in same state.
-COLORS = [
-    ("col_white",  "⚪ Blanc"),
-    ("col_black",  "⚫ Noir"),
-    ("col_grey",   "🩶 Gris"),
-]
+# Free text only — we accept any color the user types. No buttons.
+# (Leaving this list empty so legacy payload-matching paths never fire.)
+COLORS: list[tuple[str, str]] = []
 
 
 # ── Centers ────────────────────────────────────────────────────────────────
@@ -62,11 +59,14 @@ CENTERS = [
 
 
 # ── Time slots ─────────────────────────────────────────────────────────────
+# Lavage jusqu'à 22h (dernier créneau 20h–22h).
 SLOTS = [
-    ("slot_9_11",  "09h – 11h",  "Matin"),
-    ("slot_11_13", "11h – 13h",  "Fin de matinée"),
-    ("slot_14_16", "14h – 16h",  "Début après-midi"),
-    ("slot_16_18", "16h – 18h",  "Fin d'après-midi"),
+    ("slot_9_11",   "09h – 11h",  "Matin"),
+    ("slot_11_13",  "11h – 13h",  "Fin de matinée"),
+    ("slot_14_16",  "14h – 16h",  "Début après-midi"),
+    ("slot_16_18",  "16h – 18h",  "Fin d'après-midi"),
+    ("slot_18_20",  "18h – 20h",  "Début de soirée"),
+    ("slot_20_22",  "20h – 22h",  "Soirée"),
 ]
 
 
