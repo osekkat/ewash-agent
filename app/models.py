@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable
 
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 BOOKING_STATUSES = (
     "draft",
     "awaiting_confirmation",
@@ -68,6 +71,135 @@ _ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
 }
 
 REMINDER_ELIGIBLE_STATUSES = ("confirmed", "rescheduled")
+
+
+class Base(DeclarativeBase):
+    """SQLAlchemy declarative base for v0.3 persistence tables."""
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+
+    phone: Mapped[str] = mapped_column(String(32), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(120), default="")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    booking_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    vehicles: Mapped[list["CustomerVehicle"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
+    bookings: Mapped[list["BookingRow"]] = relationship(back_populates="customer")
+
+
+class CustomerVehicle(Base):
+    __tablename__ = "customer_vehicles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    customer_phone: Mapped[str] = mapped_column(ForeignKey("customers.phone"), index=True)
+    category: Mapped[str] = mapped_column(String(16), default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    color: Mapped[str] = mapped_column(String(60), default="")
+    label: Mapped[str] = mapped_column(String(180), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    customer: Mapped[Customer] = relationship(back_populates="vehicles")
+    bookings: Mapped[list["BookingRow"]] = relationship(back_populates="vehicle")
+
+
+class BookingRow(Base):
+    __tablename__ = "bookings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ref: Mapped[str] = mapped_column(String(32), default="", index=True)
+    customer_phone: Mapped[str] = mapped_column(ForeignKey("customers.phone"), index=True)
+    customer_vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("customer_vehicles.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="draft", index=True)
+    customer_name: Mapped[str] = mapped_column(String(120), default="")
+    vehicle_type: Mapped[str] = mapped_column(String(120), default="")
+    car_model: Mapped[str] = mapped_column(String(120), default="")
+    color: Mapped[str] = mapped_column(String(60), default="")
+    service_id: Mapped[str] = mapped_column(String(40), default="")
+    service_bucket: Mapped[str] = mapped_column(String(40), default="")
+    service_label: Mapped[str] = mapped_column(String(160), default="")
+    price_dh: Mapped[int] = mapped_column(Integer, default=0)
+    price_regular_dh: Mapped[int] = mapped_column(Integer, default=0)
+    promo_code: Mapped[str] = mapped_column(String(40), default="")
+    promo_label: Mapped[str] = mapped_column(String(120), default="")
+    location_mode: Mapped[str] = mapped_column(String(40), default="")
+    center: Mapped[str] = mapped_column(String(80), default="")
+    geo: Mapped[str] = mapped_column(Text, default="")
+    address: Mapped[str] = mapped_column(Text, default="")
+    date_label: Mapped[str] = mapped_column(String(80), default="")
+    slot: Mapped[str] = mapped_column(String(80), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    addon_service: Mapped[str] = mapped_column(String(40), default="")
+    addon_service_label: Mapped[str] = mapped_column(String(160), default="")
+    addon_price_dh: Mapped[int] = mapped_column(Integer, default=0)
+    appointment_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    appointment_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timezone_name: Mapped[str] = mapped_column(String(80), default="Africa/Casablanca")
+    raw_booking_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    customer: Mapped[Customer] = relationship(back_populates="bookings")
+    vehicle: Mapped[CustomerVehicle | None] = relationship(back_populates="bookings")
+    status_events: Mapped[list["BookingStatusEventRow"]] = relationship(
+        back_populates="booking", cascade="all, delete-orphan", order_by="BookingStatusEventRow.created_at"
+    )
+    reminders: Mapped[list["BookingReminderRow"]] = relationship(
+        back_populates="booking", cascade="all, delete-orphan", order_by="BookingReminderRow.scheduled_for"
+    )
+
+
+class BookingStatusEventRow(Base):
+    __tablename__ = "booking_status_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), index=True)
+    from_status: Mapped[str] = mapped_column(String(40), default="")
+    to_status: Mapped[str] = mapped_column(String(40), index=True)
+    actor: Mapped[str] = mapped_column(String(80))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    booking: Mapped[BookingRow] = relationship(back_populates="status_events")
+
+
+class ReminderRuleRow(Base):
+    __tablename__ = "reminder_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    offset_minutes_before: Mapped[int] = mapped_column(Integer)
+    max_sends: Mapped[int] = mapped_column(Integer, default=1)
+    min_minutes_between_sends: Mapped[int] = mapped_column(Integer, default=0)
+    template_name: Mapped[str] = mapped_column(String(160), default="")
+    channel: Mapped[str] = mapped_column(String(40), default="whatsapp_template")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    reminders: Mapped[list["BookingReminderRow"]] = relationship(back_populates="rule")
+
+
+class BookingReminderRow(Base):
+    __tablename__ = "booking_reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), index=True)
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("reminder_rules.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(120))
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    booking: Mapped[BookingRow] = relationship(back_populates="reminders")
+    rule: Mapped[ReminderRuleRow | None] = relationship(back_populates="reminders")
 
 
 def utcnow() -> datetime:
