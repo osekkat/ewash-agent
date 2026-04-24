@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 from . import catalog, meta, state
 from .booking import Booking
+from .persistence import persist_booking_addon, persist_confirmed_booking
 
 log = logging.getLogger(__name__)
 
@@ -581,6 +582,7 @@ async def _send_recap(phone, sess):
 async def _handle_book_confirm(phone, sess, payload_id=None, **kw):
     if payload_id == "confirm_yes":
         ref = sess.booking.assign_ref()
+        persist_confirmed_booking(sess.booking)
         await meta.send_text(
             phone,
             f"✅ *Réservation enregistrée !*\n\n"
@@ -697,8 +699,7 @@ async def _handle_upsell_detailing_pick(phone, sess, payload_id=None, **kw):
     sess.booking.addon_service = payload_id
     sess.booking.addon_service_label = label
     sess.booking.addon_price_dh = disc
-    from .booking import update_booking
-    update_booking(
+    persist_booking_addon(
         sess.booking.ref,
         addon_service=payload_id,
         addon_service_label=label,

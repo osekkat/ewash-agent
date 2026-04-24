@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .admin_i18n import SUPPORTED_LOCALES, admin_nav_labels, normalize_locale, t
 from .config import settings
+from .persistence import admin_dashboard_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 _SESSION_COOKIE = "ewash_admin_session"
@@ -178,6 +179,22 @@ def _password_form(*, locale: str, error: str = "") -> HTMLResponse:
 
 def _dashboard(*, locale: str) -> HTMLResponse:
     title = t("nav.dashboard", locale)
+    summary = admin_dashboard_summary()
+    if summary.recent_bookings:
+        recent_rows = "".join(
+            "<div class=\"table-row\">"
+            f"<span>{escape(item.customer_name)}</span>"
+            f"<span>{escape(item.service_label)}</span>"
+            f"<span>{escape(item.status)}</span>"
+            "</div>"
+            for item in summary.recent_bookings
+        )
+        recent_text = t("admin.panel.recent_bookings_intro", locale)
+    else:
+        recent_rows = '<div class="table-row"><span>—</span><span>—</span><span>—</span></div>'
+        recent_text = t("admin.panel.no_bookings", locale)
+
+    persistence_state = "OK" if summary.db_available else escape(t('admin.next.soon', locale))
     body = f"""
 <section class="hero">
   <div>
@@ -185,39 +202,39 @@ def _dashboard(*, locale: str) -> HTMLResponse:
     <h1>{escape(title)}</h1>
     <p>{escape(t('admin.dashboard.placeholder', locale))}</p>
   </div>
-  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha5</div>
+  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha6</div>
 </section>
 
 <section class="metric-grid" aria-label="Résumé opérationnel">
   <article class="metric-card">
     <div class="metric-label">{escape(t('admin.metric.bookings_today', locale))}</div>
-    <div class="metric-value">0</div>
-    <div class="metric-note">{escape(t('admin.metric.pending_data', locale))}</div>
+    <div class="metric-value">{summary.total_bookings}</div>
+    <div class="metric-note">{escape(t('admin.metric.from_db', locale))}</div>
   </article>
   <article class="metric-card">
     <div class="metric-label">{escape(t('admin.metric.awaiting_confirmation', locale))}</div>
-    <div class="metric-value">0</div>
-    <div class="metric-note">{escape(t('admin.metric.pending_data', locale))}</div>
+    <div class="metric-value">{summary.awaiting_confirmation}</div>
+    <div class="metric-note">{escape(t('admin.metric.from_db', locale))}</div>
   </article>
   <article class="metric-card">
     <div class="metric-label">{escape(t('admin.metric.customers', locale))}</div>
-    <div class="metric-value">0</div>
-    <div class="metric-note">{escape(t('admin.metric.pending_data', locale))}</div>
+    <div class="metric-value">{summary.customers}</div>
+    <div class="metric-note">{escape(t('admin.metric.from_db', locale))}</div>
   </article>
   <article class="metric-card">
     <div class="metric-label">{escape(t('admin.metric.reminders', locale))}</div>
-    <div class="metric-value">0</div>
-    <div class="metric-note">{escape(t('admin.metric.pending_data', locale))}</div>
+    <div class="metric-value">{summary.pending_reminders}</div>
+    <div class="metric-note">{escape(t('admin.metric.from_db', locale))}</div>
   </article>
 </section>
 
 <section class="dashboard-grid">
   <article class="empty-panel">
     <h2>{escape(t('admin.panel.recent_bookings', locale))}</h2>
-    <p>{escape(t('admin.panel.no_bookings', locale))}</p>
+    <p>{escape(recent_text)}</p>
     <div class="table-shell" aria-label="Réservations récentes">
       <div class="table-row table-head"><span>Client</span><span>Service</span><span>Statut</span></div>
-      <div class="table-row"><span>—</span><span>—</span><span>—</span></div>
+      {recent_rows}
     </div>
   </article>
   <aside class="empty-panel">
@@ -225,7 +242,7 @@ def _dashboard(*, locale: str) -> HTMLResponse:
     <div class="status-list">
       <div class="status-item"><span><span class="dot"></span>{escape(t('admin.next.password', locale))}</span><span>OK</span></div>
       <div class="status-item"><span><span class="dot"></span>{escape(t('admin.next.db', locale))}</span><span>OK</span></div>
-      <div class="status-item"><span>{escape(t('admin.next.persistence', locale))}</span><span class="soon">{escape(t('admin.next.soon', locale))}</span></div>
+      <div class="status-item"><span><span class="dot"></span>{escape(t('admin.next.persistence', locale))}</span><span>{persistence_state}</span></div>
       <div class="status-item"><span>{escape(t('admin.next.pages', locale))}</span><span class="soon">{escape(t('admin.next.soon', locale))}</span></div>
     </div>
     <p><a href="/admin/logout">{escape(t('nav.logout', locale))}</a></p>
