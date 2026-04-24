@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .admin_i18n import SUPPORTED_LOCALES, normalize_locale, t
 from .config import settings
-from .persistence import admin_booking_list, admin_dashboard_summary
+from .persistence import admin_booking_list, admin_customer_list, admin_dashboard_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 _SESSION_COOKIE = "ewash_admin_session"
@@ -147,6 +147,7 @@ def _layout(*, locale: str, title: str, body: str, active_path: str = "/admin") 
     .table-shell {{ margin-top: 18px; border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; }}
     .table-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; padding: 13px 14px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 13px; }}
     .booking-row {{ grid-template-columns: .8fr 1.1fr 1fr 1.3fr .9fr .9fr .7fr; align-items: center; }}
+    .customer-row {{ grid-template-columns: 1.2fr 1fr 1.4fr .8fr; align-items: center; }}
     .table-row:last-child {{ border-bottom: 0; }}
     .table-head {{ color: var(--soft); background: rgba(255,255,255,0.03); font-weight: 510; }}
     .status-list {{ display: grid; gap: 10px; margin-top: 18px; }}
@@ -221,7 +222,7 @@ def _dashboard(*, locale: str) -> HTMLResponse:
     <h1>{escape(title)}</h1>
     <p>{escape(t('admin.dashboard.placeholder', locale))}</p>
   </div>
-  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha8</div>
+  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha9</div>
 </section>
 
 <section class="metric-grid" aria-label="Résumé opérationnel">
@@ -280,7 +281,7 @@ def _placeholder_page(*, locale: str, page_key: str, active_path: str) -> HTMLRe
     <h1>{escape(title)}</h1>
     <p>{escape(t('admin.page.placeholder', locale))}</p>
   </div>
-  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha8</div>
+  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha9</div>
 </section>
 <section class="dashboard-grid">
   <article class="empty-panel">
@@ -327,7 +328,7 @@ def _bookings_page(*, locale: str) -> HTMLResponse:
     <h1>{escape(title)}</h1>
     <p>{escape(intro)}</p>
   </div>
-  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha8</div>
+  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha9</div>
 </section>
 <section class="empty-panel">
   <h2>{escape(t('admin.panel.recent_bookings', locale))}</h2>
@@ -339,6 +340,47 @@ def _bookings_page(*, locale: str) -> HTMLResponse:
 """
     return HTMLResponse(
         content=_layout(locale=locale, title=title, body=body, active_path="/admin/bookings"),
+        status_code=200,
+    )
+
+
+def _customers_page(*, locale: str) -> HTMLResponse:
+    title = t("nav.customers", locale)
+    customers = admin_customer_list()
+    if customers:
+        rows = "".join(
+            "<div class=\"table-row customer-row\">"
+            f"<span>{escape(item.display_name)}</span>"
+            f"<span>{escape(item.phone)}</span>"
+            f"<span>{escape(', '.join(item.vehicle_labels) or '—')}</span>"
+            f"<span>{item.booking_count} réservation{'s' if item.booking_count != 1 else ''}</span>"
+            "</div>"
+            for item in customers
+        )
+        intro = f"{len(customers)} client(s) persisté(s) en base."
+    else:
+        rows = '<div class="table-row customer-row"><span>—</span><span>—</span><span>—</span><span>—</span></div>'
+        intro = "Aucun client persisté pour le moment. Les clients apparaissent ici après une réservation WhatsApp confirmée."
+
+    body = f"""
+<section class="hero">
+  <div>
+    <div class="eyebrow">Ewash Ops</div>
+    <h1>{escape(title)}</h1>
+    <p>{escape(intro)}</p>
+  </div>
+  <div class="version-pill"><strong>{escape(t('admin.dashboard.version_label', locale))}</strong> v0.3.0-alpha9</div>
+</section>
+<section class="empty-panel">
+  <h2>{escape(title)}</h2>
+  <div class="table-shell" aria-label="Clients persistés">
+    <div class="table-row table-head customer-row"><span>Client</span><span>Téléphone</span><span>Véhicules</span><span>Réservations</span></div>
+    {rows}
+  </div>
+</section>
+"""
+    return HTMLResponse(
+        content=_layout(locale=locale, title=title, body=body, active_path="/admin/customers"),
         status_code=200,
     )
 
@@ -418,4 +460,6 @@ async def admin_section(request: Request, page_slug: str, lang: str | None = Que
         return _password_form(locale=locale)
     if page_id == "bookings":
         return _bookings_page(locale=locale)
+    if page_id == "customers":
+        return _customers_page(locale=locale)
     return _placeholder_page(locale=locale, page_key=page_key, active_path=active_path)

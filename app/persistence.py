@@ -53,6 +53,14 @@ class AdminBookingListItem:
 
 
 @dataclass(frozen=True)
+class AdminCustomerListItem:
+    phone: str
+    display_name: str
+    booking_count: int
+    vehicle_labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DashboardSummary:
     total_bookings: int = 0
     confirmed_bookings: int = 0
@@ -254,6 +262,38 @@ def admin_booking_list(*, engine: Engine | None = None, limit: int = 100) -> tup
             return tuple(items)
     except Exception:
         log.exception("admin_booking_list failed")
+        return ()
+
+
+def admin_customer_list(*, engine: Engine | None = None, limit: int = 100) -> tuple[AdminCustomerListItem, ...]:
+    db_engine = _engine_or_configured(engine)
+    if db_engine is None:
+        return ()
+    try:
+        with session_scope(db_engine) as session:
+            customers = session.scalars(
+                select(Customer).order_by(Customer.last_seen_at.desc()).limit(limit)
+            ).all()
+            items: list[AdminCustomerListItem] = []
+            for customer in customers:
+                vehicles = session.scalars(
+                    select(CustomerVehicle).where(
+                        CustomerVehicle.customer_phone == customer.phone,
+                        CustomerVehicle.active.is_(True),
+                    )
+                ).all()
+                labels = tuple(vehicle.label or " — ".join(part for part in (vehicle.model, vehicle.color) if part) for vehicle in vehicles)
+                items.append(
+                    AdminCustomerListItem(
+                        phone=customer.phone,
+                        display_name=customer.display_name or customer.phone,
+                        booking_count=customer.booking_count or 0,
+                        vehicle_labels=tuple(label for label in labels if label),
+                    )
+                )
+            return tuple(items)
+    except Exception:
+        log.exception("admin_customer_list failed")
         return ()
 
 

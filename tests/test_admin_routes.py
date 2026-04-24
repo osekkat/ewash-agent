@@ -145,6 +145,34 @@ def test_admin_bookings_page_renders_persisted_reservations(monkeypatch, tmp_pat
     _configured_engine.cache_clear()
 
 
+def test_admin_customers_page_renders_persisted_clients(monkeypatch, tmp_path):
+    db_url = f"sqlite+pysqlite:///{tmp_path / 'admin-customers.db'}"
+    engine = make_engine(db_url)
+    init_db(engine)
+    booking = _sample_booking()
+    persist_confirmed_booking(booking, engine=engine)
+    monkeypatch.setattr(settings, "database_url", db_url)
+    _configured_engine.cache_clear()
+    monkeypatch.setattr(settings, "admin_password", "secret-pass")
+    client = TestClient(app)
+    client.post(
+        "/admin",
+        content="password=secret-pass",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    response = client.get("/admin/customers")
+
+    assert response.status_code == 200
+    assert "Clients" in response.text
+    assert "Sekkat" in response.text
+    assert "212665883062" in response.text
+    assert "Porsche — Gris" in response.text
+    assert "1 réservation" in response.text
+    assert "Cette page arrive dans le prochain lot" not in response.text
+    _configured_engine.cache_clear()
+
+
 def test_admin_sidebar_pages_are_clickable_placeholders(monkeypatch):
     monkeypatch.setattr(settings, "admin_password", "secret-pass")
     client = TestClient(app)
@@ -155,7 +183,6 @@ def test_admin_sidebar_pages_are_clickable_placeholders(monkeypatch):
     )
 
     expected_pages = {
-        "/admin/customers": "Clients",
         "/admin/prices": "Prix",
         "/admin/promos": "Promos",
         "/admin/reminders": "Rappels",
