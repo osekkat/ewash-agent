@@ -175,8 +175,9 @@ async def _ask_where(phone, sess):
 async def _ask_service(phone, sess):
     """Show the car-wash or moto service list, depending on category.
 
-    Called AFTER location is known — so we can hint the chosen lieu in the
-    prompt header and avoid surprising the customer later in the flow.
+    Called AFTER location (and, for cars, after the promo-code opt-in) — so we
+    can hint the chosen lieu (and promo) in the prompt header and avoid
+    surprising the customer later in the flow.
     """
     sess.state = "BOOK_SERVICE"
     cat = sess.booking.category
@@ -196,19 +197,24 @@ async def _ask_service(phone, sess):
         )
         return
 
-    # Car lane — Lavages catalog (Esthétique is post-confirmation upsell)
+    # Car lane — Lavages catalog (Esthétique is post-confirmation upsell).
+    # Promo code (if any) swaps in the partner-preferential prices.
     sess.booking.service_bucket = "wash"
+    promo = sess.booking.promo_code or None
+    promo_tag = f" · 🎁 {sess.booking.promo_label}" if promo else ""
+    section_title = f"🎁 {sess.booking.promo_code}" if promo else f"Lavages · cat. {cat}"
     await meta.send_list(
         phone,
-        f"🧼 *Nos formules de lavage*\n_(tarifs pour catégorie {cat}{where_tag})_",
+        f"🧼 *Nos formules de lavage*\n_(tarifs pour catégorie {cat}{where_tag}{promo_tag})_",
         button_label="Voir les tarifs",
-        rows=catalog.build_car_service_rows(cat, bucket="wash"),
-        section_title=f"Lavages · cat. {cat}",
+        rows=catalog.build_car_service_rows(cat, bucket="wash", promo_code=promo),
+        section_title=section_title[:24],
     )
 
 
 async def _handle_book_service(phone, sess, payload_id=None, **kw):
     cat = sess.booking.category
+    promo = sess.booking.promo_code or None
     # Valid service IDs depend on the lane:
     #   - moto → SERVICES_MOTO
     #   - car  → SERVICES_WASH (bucket is pre-set to "wash" in _ask_service;
@@ -220,29 +226,33 @@ async def _handle_book_service(phone, sess, payload_id=None, **kw):
         body = "Choisissez un service :"
     else:
         bucket = sess.booking.service_bucket or "all"
+        promo_tag = f" · 🎁 {sess.booking.promo_label}" if promo else ""
         if bucket == "wash":
             valid = {sid for sid, *_ in catalog.SERVICES_WASH}
-            section = f"Lavages · cat. {cat}"
-            body = f"🧼 *Nos formules de lavage*\n_(cat. {cat})_"
+            section = f"🎁 {promo}" if promo else f"Lavages · cat. {cat}"
+            body = f"🧼 *Nos formules de lavage*\n_(cat. {cat}{promo_tag})_"
         elif bucket == "detailing":
             valid = {sid for sid, *_ in catalog.SERVICES_DETAILING}
-            section = f"Esthétique · cat. {cat}"
-            body = f"✨ *Nos offres d'esthétique*\n_(cat. {cat})_"
+            section = f"🎁 {promo} · Esth." if promo else f"Esthétique · cat. {cat}"
+            body = f"✨ *Nos offres d'esthétique*\n_(cat. {cat}{promo_tag})_"
         else:
             valid = {sid for sid, *_ in catalog.SERVICES_CAR}
             section = f"Tarifs catégorie {cat}"
-            body = f"Choisissez un service :\n_(cat. {cat})_"
-        rows = catalog.build_car_service_rows(cat, bucket=bucket)
+            body = f"Choisissez un service :\n_(cat. {cat}{promo_tag})_"
+        section = section[:24]
+        rows = catalog.build_car_service_rows(cat, bucket=bucket, promo_code=promo)
 
     if payload_id not in valid:
         await meta.send_list(phone, body, "Voir les tarifs", rows, section)
         return
 
-    price = catalog.service_price(payload_id, cat)
+    price = catalog.service_price(payload_id, cat, promo_code=promo)
+    regular = catalog.service_price(payload_id, cat)  # always the public grid
     name = catalog.service_name(payload_id)
     sess.booking.service = payload_id
     sess.booking.service_label = f"{name} — {price} DH"
     sess.booking.price_dh = price or 0
+    sess.booking.price_regular_dh = regular or 0
     # Location is already captured — go straight to date/slot selection.
     await _ask_when(phone, sess)
 
@@ -254,7 +264,7 @@ async def _handle_book_where(phone, sess, payload_id=None, **kw):
             # Only one center → auto-pick and skip selection.
             row = catalog.CENTERS[0]
             sess.booking.center = f"{row[1]} — {row[2]}"
-            await _ask_service(phone, sess)
+            await _after_location(phone, sess)
         else:
             sess.state = "BOOK_CENTER"
             await meta.send_list(phone, "Quel centre Ewash ?", "Choisir le centre",
@@ -286,7 +296,7 @@ async def _handle_book_center(phone, sess, payload_id=None, **kw):
                              catalog.CENTERS, "Centres disponibles")
         return
     sess.booking.center = catalog.label_for(catalog.CENTERS, payload_id)
-    await _ask_service(phone, sess)
+    await _after_location(phone, sess)
 
 
 async def _handle_book_geo(phone, sess, location=None, **kw):
@@ -322,6 +332,78 @@ async def _handle_book_address(phone, sess, text=None, **kw):
         )
         return
     sess.booking.address = text.strip()[:300]
+    await _after_location(phone, sess)
+
+
+async def _after_location(phone, sess):
+    """Branch after location is fully captured.
+
+    Cars → promo-code opt-in (BOOK_PROMO_ASK).
+    Moto → straight to service menu (flyers show no moto discount, and the
+    moto catalog is just 2 rows, so keeping the flow short matters).
+    """
+    if sess.booking.category == "MOTO":
+        await _ask_service(phone, sess)
+        return
+    await _ask_promo(phone, sess)
+
+
+async def _ask_promo(phone, sess):
+    """Ask whether the customer has a partner promo code (cars only).
+
+    A "Yes" routes to BOOK_PROMO_CODE for free-text entry; "No" goes straight
+    to the service menu with the public grid. The buttons are intentionally
+    action-first so customers without a code don't feel gated.
+    """
+    sess.state = "BOOK_PROMO_ASK"
+    await meta.send_buttons(
+        phone,
+        "🎁 *Avez-vous un code promo partenaire ?*\n\n"
+        "Certains partenaires (résidences, entreprises…) offrent des "
+        "tarifs préférentiels à leurs clients.",
+        [("promo_no",  "Non, continuer"),
+         ("promo_yes", "🎁 J'ai un code")],
+    )
+
+
+async def _handle_book_promo_ask(phone, sess, payload_id=None, **kw):
+    if payload_id == "promo_no":
+        await _ask_service(phone, sess)
+        return
+    if payload_id == "promo_yes":
+        sess.state = "BOOK_PROMO_CODE"
+        await meta.send_text(
+            phone,
+            "🎁 Écrivez votre *code promo* (ex: *YASMINE*).\n\n"
+            "_Tapez *passer* si vous n'en avez pas finalement._",
+        )
+        return
+    # Unknown payload — re-prompt
+    await _ask_promo(phone, sess)
+
+
+async def _handle_book_promo_code(phone, sess, text=None, **kw):
+    # Escape hatch: customer changes their mind after tapping "J'ai un code".
+    if text and text.strip().lower() in {"passer", "skip", "non", "aucun"}:
+        await _ask_service(phone, sess)
+        return
+    code = catalog.normalize_promo_code(text or "")
+    if not code:
+        await meta.send_buttons(
+            phone,
+            "❌ Ce code ne nous dit rien.\n\n"
+            "Vérifiez l'orthographe et réessayez, ou continuez sans code.",
+            [("promo_no",  "Continuer sans code"),
+             ("promo_yes", "🔁 Réessayer le code")],
+        )
+        sess.state = "BOOK_PROMO_ASK"
+        return
+    sess.booking.promo_code = code
+    sess.booking.promo_label = catalog.promo_label(code)
+    await meta.send_text(
+        phone,
+        f"✅ Code *{code}* appliqué — tarifs *{sess.booking.promo_label}*.",
+    )
     await _ask_service(phone, sess)
 
 
@@ -459,11 +541,23 @@ async def _send_recap(phone, sess):
         vehicle_line = f"🏍️ *Véhicule* : {b.vehicle_type}\n"
     else:
         vehicle_line = f"🚗 *Véhicule* : {b.vehicle_type} — {b.car_model} ({b.color})\n"
+    # Promo tag + savings math (cars only — moto is never discounted).
+    promo_line = ""
+    if b.promo_code:
+        savings = max(0, (b.price_regular_dh or 0) - (b.price_dh or 0))
+        if savings > 0:
+            promo_line = (
+                f"🎁 *Promo* : {b.promo_label} "
+                f"(économie -{savings} DH vs tarif public)\n"
+            )
+        else:
+            promo_line = f"🎁 *Promo* : {b.promo_label}\n"
     recap = (
         "📋 *Récapitulatif*\n\n"
         f"👤 *Nom* : {b.name}\n"
         + vehicle_line +
         f"🧼 *Service* : {b.service_label or b.service}\n"
+        + promo_line
         + where_block +
         f"🗓️ *Date* : {b.date_label}\n"
         f"⏰ *Créneau* : {b.slot}\n"
@@ -522,16 +616,23 @@ async def _handle_book_confirm(phone, sess, payload_id=None, **kw):
     await _send_recap(phone, sess)
 
 
-def _build_detailing_upsell_rows(category: str) -> list[tuple[str, str, str]]:
+def _build_detailing_upsell_rows(
+    category: str,
+    promo_code: str | None = None,
+) -> list[tuple[str, str, str]]:
     """Render SERVICES_DETAILING as WhatsApp list rows with prices already
     discounted by 10% (rounded to nearest DH).
 
-    A trailing "Aucune, merci" row lets the customer decline the upsell
+    When `promo_code` is set, the 10% is applied on top of the partner price
+    (Yasmine customers stack their preferential tariff with the 10% upsell).
+    Services not covered by the partner grid fall back to the public price.
+
+    A trailing "Aucune merci" row lets the customer decline the upsell
     without ghosting the conversation.
     """
     rows = []
     for sid, name, desc, prices in catalog.SERVICES_DETAILING:
-        base = prices.get(category)
+        base = catalog.service_price(sid, category, promo_code=promo_code)
         if base is None:
             continue
         disc = round(base * 0.9)
@@ -545,13 +646,16 @@ def _build_detailing_upsell_rows(category: str) -> list[tuple[str, str, str]]:
 async def _handle_upsell_detailing(phone, sess, payload_id=None, **kw):
     if payload_id == "upsell_yes":
         cat = sess.booking.category
+        promo = sess.booking.promo_code or None
+        promo_tag = f" · 🎁 {sess.booking.promo_label}" if promo else ""
+        section = f"🎁 {promo} · -10%" if promo else f"Esthétique -10% · {cat}"
         sess.state = "UPSELL_DETAILING_PICK"
         await meta.send_list(
             phone,
-            f"✨ *Esthétique à -10%*\n_(remise déjà appliquée, catégorie {cat})_",
+            f"✨ *Esthétique à -10%*\n_(remise déjà appliquée, cat. {cat}{promo_tag})_",
             button_label="Choisir prestation",
-            rows=_build_detailing_upsell_rows(cat),
-            section_title=f"Esthétique -10% · cat. {cat}",
+            rows=_build_detailing_upsell_rows(cat, promo_code=promo),
+            section_title=section[:24],
         )
         return
     if payload_id == "upsell_no":
@@ -568,6 +672,7 @@ async def _handle_upsell_detailing(phone, sess, payload_id=None, **kw):
 
 async def _handle_upsell_detailing_pick(phone, sess, payload_id=None, **kw):
     cat = sess.booking.category
+    promo = sess.booking.promo_code or None
     # Escape hatch: user picked "Aucune, merci" — thank & end politely
     if payload_id == "upsell_none":
         await meta.send_text(phone, "Pas de souci, à très vite chez Ewash ! 🙂")
@@ -575,15 +680,17 @@ async def _handle_upsell_detailing_pick(phone, sess, payload_id=None, **kw):
         return
     valid = {sid for sid, *_ in catalog.SERVICES_DETAILING}
     if payload_id not in valid:
+        promo_tag = f" · 🎁 {sess.booking.promo_label}" if promo else ""
+        section = f"🎁 {promo} · -10%" if promo else f"Esthétique -10% · {cat}"
         await meta.send_list(
             phone,
-            f"✨ *Esthétique à -10%*\n_(remise déjà appliquée, catégorie {cat})_",
+            f"✨ *Esthétique à -10%*\n_(remise déjà appliquée, cat. {cat}{promo_tag})_",
             "Choisir la prestation",
-            _build_detailing_upsell_rows(cat),
-            f"Esthétique -10% · cat. {cat}",
+            _build_detailing_upsell_rows(cat, promo_code=promo),
+            section[:24],
         )
         return
-    base = catalog.service_price(payload_id, cat)
+    base = catalog.service_price(payload_id, cat, promo_code=promo)
     disc = round(base * 0.9) if base is not None else 0
     name = catalog.service_name(payload_id)
     label = f"{name} — {disc} DH (-10%)"
@@ -657,6 +764,8 @@ _DISPATCH = {
     "BOOK_CENTER":           _handle_book_center,
     "BOOK_GEO":              _handle_book_geo,
     "BOOK_ADDRESS":          _handle_book_address,
+    "BOOK_PROMO_ASK":        _handle_book_promo_ask,
+    "BOOK_PROMO_CODE":       _handle_book_promo_code,
     "BOOK_WHEN":             _handle_book_when,
     "BOOK_SLOT":             _handle_book_slot,
     "BOOK_NOTE":             _handle_book_note,

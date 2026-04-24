@@ -38,6 +38,13 @@ class Booking:
     addon_service_label: str = ""  # "Le Polissage — 891 DH (-10%)"
     addon_price_dh: int = 0        # discounted DH price of the addon
 
+    # Promo code (partner preferential tariff, e.g. YASMINE). Empty string
+    # means the public / regular grid applies. Captured BEFORE the service
+    # menu so the list rows render the correct (discounted) prices.
+    promo_code: str = ""            # UPPERCASE canonical code, e.g. "YASMINE"
+    promo_label: str = ""           # Human-readable, e.g. "Yasmine Signature"
+    price_regular_dh: int = 0       # Public price at time of booking (for savings math)
+
     # Transient state for the paginated date picker (BOOK_WHEN). Not persisted
     # into `_bookings` in any meaningful way — just survives the round-trip
     # between "Voir plus" taps.

@@ -72,6 +72,54 @@ SERVICES_MOTO = [
 COLORS: list[tuple[str, str]] = []
 
 
+# ── Promo codes ────────────────────────────────────────────────────────────
+# Per-partner preferential tariffs. When a customer enters a valid code during
+# booking, service_price() + build_car_service_rows() use the discounted grid
+# instead of the public one. Moto is intentionally excluded — the printed
+# flyers show no moto discount on any partner tier.
+#
+# Add new codes by dropping a new entry keyed on the UPPERCASE code. Keep keys
+# alphanumeric (partner DMs + printed flyers tend to be fat-fingered).
+PROMO_CODES: dict[str, dict] = {
+    "YASMINE": {
+        "label": "Yasmine Signature",
+        # Regular → promo price map per service_id × category.
+        # Matches "Tarifs Exclusifs Yasmine Signature" Apr-2026 flyer.
+        "discounts": {
+            "svc_ext":    {"A": 55,  "B": 60,  "C": 65},
+            "svc_cpl":    {"A": 100, "B": 110, "C": 120},
+            "svc_sal":    {"A": 415, "B": 460, "C": 500},
+            "svc_pol":    {"A": 790, "B": 856, "C": 920},
+            "svc_cer6m":  {"A": 640, "B": 640, "C": 640},
+            "svc_cer6w":  {"A": 160, "B": 160, "C": 160},
+            "svc_cuir":   {"A": 200, "B": 200, "C": 200},
+            "svc_plastq": {"A": 120, "B": 120, "C": 200},
+            "svc_optq":   {"A": 200, "B": 200, "C": 200},
+            "svc_lustre": {"A": 480, "B": 480, "C": 560},
+            # MOTO intentionally excluded (no partner discount on 2-wheels).
+        },
+    },
+}
+
+
+def normalize_promo_code(text: str) -> str | None:
+    """Normalize free-text promo input. Returns the canonical UPPERCASE code
+    if valid, else None. Case-insensitive, trims whitespace and stray quotes."""
+    if not text:
+        return None
+    cleaned = text.strip().strip("'\"“”‘’ ").upper()
+    if cleaned in PROMO_CODES:
+        return cleaned
+    return None
+
+
+def promo_label(code: str | None) -> str:
+    """Human-readable partner label for a normalized code, or ''."""
+    if code and code in PROMO_CODES:
+        return PROMO_CODES[code]["label"]
+    return ""
+
+
 # ── Closed days (Eids, etc.) ───────────────────────────────────────────────
 # ISO dates (YYYY-MM-DD) the shop is closed — skipped when proposing dates.
 # Update yearly: Eid dates shift ~10-11 days earlier each year.
@@ -109,7 +157,11 @@ def label_for(pairs, rid: str) -> str:
     return rid
 
 
-def build_car_service_rows(category: str, bucket: str = "all") -> list[tuple[str, str, str]]:
+def build_car_service_rows(
+    category: str,
+    bucket: str = "all",
+    promo_code: str | None = None,
+) -> list[tuple[str, str, str]]:
     """Render car services as WhatsApp list rows (id, title, description).
 
     Title embeds the price for the customer's category inline, e.g.:
@@ -120,6 +172,10 @@ def build_car_service_rows(category: str, bucket: str = "all") -> list[tuple[str
       - "wash"       → SERVICES_WASH (L'Extérieur / Le Complet / Le Salon)
       - "detailing"  → SERVICES_DETAILING (Polissage / Céramique / Rénovations / Lustrage)
       - "all"        → both (legacy behaviour, kept for safety)
+
+    `promo_code` (optional, UPPERCASE) swaps in the partner-preferential price
+    where a discount row exists. Services not covered by the partner grid keep
+    their regular price. Invalid codes are treated as no-promo.
 
     WhatsApp limits:
       - title ≤ 24 chars (we stay under)
@@ -133,9 +189,14 @@ def build_car_service_rows(category: str, bucket: str = "all") -> list[tuple[str
     else:
         source = SERVICES_CAR
 
+    promo = PROMO_CODES.get(promo_code) if promo_code else None
     rows = []
     for sid, name, desc, prices in source:
         price = prices.get(category)
+        if promo:
+            promo_price = promo["discounts"].get(sid, {}).get(category)
+            if promo_price is not None:
+                price = promo_price
         title = f"{name} — {price} DH" if price is not None else name
         rows.append((sid, title[:24], desc[:72]))
     return rows
@@ -149,13 +210,25 @@ def build_moto_service_rows() -> list[tuple[str, str, str]]:
     return rows
 
 
-def service_price(service_id: str, category: str) -> int | None:
-    """Look up the price for a given service+category. Returns DH integer or None."""
+def service_price(
+    service_id: str,
+    category: str,
+    promo_code: str | None = None,
+) -> int | None:
+    """Look up the price for a given service+category. Returns DH integer or None.
+
+    When `promo_code` is a valid UPPERCASE partner code, the partner grid wins
+    for any service covered by that partner. Moto is never discounted.
+    """
     if category == "MOTO":
         for sid, _name, _desc, price in SERVICES_MOTO:
             if sid == service_id:
                 return price
         return None
+    if promo_code and promo_code in PROMO_CODES:
+        promo_price = PROMO_CODES[promo_code]["discounts"].get(service_id, {}).get(category)
+        if promo_price is not None:
+            return promo_price
     for sid, _name, _desc, prices in SERVICES_CAR:
         if sid == service_id:
             return prices.get(category)
