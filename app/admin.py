@@ -6,14 +6,38 @@ configured, so deploying the implementation slice does not expose booking ops.
 from __future__ import annotations
 
 from html import escape
+import secrets
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .admin_i18n import SUPPORTED_LOCALES, admin_nav_labels, normalize_locale, t
 from .config import settings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+_security = HTTPBasic(auto_error=False)
+
+
+def _password_challenge() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Admin password required",
+        headers={"WWW-Authenticate": 'Basic realm="Ewash Admin"'},
+    )
+
+
+def _require_admin_password(
+    credentials: HTTPBasicCredentials | None = Depends(_security),
+) -> None:
+    """Protect admin routes with the browser's native Basic Auth prompt."""
+    if not settings.admin_password:
+        return
+    if credentials is None:
+        raise _password_challenge()
+    supplied_password = credentials.password or ""
+    if not secrets.compare_digest(supplied_password, settings.admin_password):
+        raise _password_challenge()
 
 
 def _language_switch(locale: str) -> str:
@@ -48,10 +72,13 @@ def _layout(*, locale: str, title: str, body: str) -> str:
 
 
 @router.get("", response_class=HTMLResponse)
-async def admin_index(lang: str | None = Query(default=None)) -> HTMLResponse:
+async def admin_index(
+    lang: str | None = Query(default=None),
+    _: None = Depends(_require_admin_password),
+) -> HTMLResponse:
     locale = normalize_locale(lang or settings.admin_default_locale)
 
-    if not settings.admin_password or not settings.admin_session_secret:
+    if not settings.admin_password:
         title = t("admin.not_configured.title", locale)
         body = (
             f"<h1>{escape(title)}</h1>"
