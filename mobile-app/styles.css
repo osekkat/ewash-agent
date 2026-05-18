@@ -676,23 +676,6 @@ button.chip:active { transform: scale(0.95); }
   background: var(--gold);
 }
 
-/* ============ Map placeholder ============ */
-.map-bg {
-  background:
-    linear-gradient(180deg, rgba(31,169,169,0.06) 0%, rgba(31,169,169,0.0) 100%),
-    repeating-linear-gradient(45deg, transparent 0 24px, rgba(31,169,169,0.06) 24px 25px),
-    repeating-linear-gradient(-45deg, transparent 0 24px, rgba(31,169,169,0.06) 24px 25px),
-    var(--surface-2);
-  position: relative;
-}
-[data-variant="premium"] .map-bg {
-  background:
-    linear-gradient(180deg, rgba(212,183,117,0.06) 0%, rgba(0,0,0,0) 100%),
-    repeating-linear-gradient(45deg, transparent 0 24px, rgba(212,183,117,0.06) 24px 25px),
-    repeating-linear-gradient(-45deg, transparent 0 24px, rgba(212,183,117,0.06) 24px 25px),
-    var(--surface-2);
-}
-
 /* ============ Image placeholder ============ */
 .img-ph {
   background:

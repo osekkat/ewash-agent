@@ -1255,7 +1255,6 @@ function AddressPinStep({ t, data, patch, error, onNext }) {
   const hasPinAddress = !!(data.pinAddress || '').trim();
   const [geoBusy, setGeoBusy] = useS_b(false);
   const [geoErr, setGeoErr] = useS_b('');
-  const dropPin = () => patch({ pinAddress: t.pinDroppedAddress || 'Position sélectionnée sur la carte' });
   const useMyLocation = () => {
     if (geoBusy) return;
     setGeoErr('');
@@ -1303,108 +1302,42 @@ function AddressPinStep({ t, data, patch, error, onNext }) {
         <div className="t-h1">{t.pinAddress}</div>
         <div className="t-muted">{t.pinAddressSub}</div>
       </div>
-      <div style={{ padding: '0 16px' }}>
-        <div
-          role="button"
-          tabIndex={0}
-          className="map-bg"
-          onClick={dropPin}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              dropPin();
-            }
-          }}
-          style={{
-          height: 220, borderRadius: 20,
-          position: 'relative', overflow: 'hidden',
-          border: '1px solid var(--border)',
-          display: 'block',
-          width: '100%',
-          padding: 0,
-          textAlign: 'inherit',
-        }}>
-          {/* roads */}
-          <svg viewBox="0 0 360 220" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-            <path d="M-20 130 Q90 100, 180 140 T380 110" stroke="var(--border-strong)" strokeWidth="14" fill="none" opacity="0.7"/>
-            <path d="M-20 130 Q90 100, 180 140 T380 110" stroke="var(--surface)" strokeWidth="10" fill="none" />
-            <path d="M60 -20 L120 240" stroke="var(--border-strong)" strokeWidth="10" fill="none" opacity="0.7"/>
-            <path d="M60 -20 L120 240" stroke="var(--surface)" strokeWidth="6" fill="none"/>
-            <path d="M250 0 L240 240" stroke="var(--border-strong)" strokeWidth="10" fill="none" opacity="0.5"/>
-            <path d="M250 0 L240 240" stroke="var(--surface)" strokeWidth="6" fill="none"/>
-          </svg>
-          {/* pin centered */}
-          <div style={{
-            position: 'absolute', left: '50%', top: '50%',
-            transform: 'translate(-50%, -100%)',
-            color: 'var(--primary)',
-          }}>
-            <svg width="40" height="48" viewBox="0 0 40 48" fill="none">
-              <path d="M20 4 C30 4 36 12 36 20 C36 32 20 44 20 44 S4 32 4 20 C4 12 10 4 20 4z"
-                fill="var(--primary)" stroke="var(--surface)" strokeWidth="3"/>
-              <circle cx="20" cy="20" r="6" fill="var(--surface)"/>
-            </svg>
-          </div>
-          {/* ripple */}
-          <div style={{
-            position: 'absolute', left: '50%', top: '50%',
-            transform: 'translate(-50%, -50%)',
-            width: 32, height: 32, borderRadius: 99,
-            background: 'var(--primary)', opacity: 0.2,
-            animation: 'ripple 2s infinite',
-          }}/>
-          {/* Use-my-location button. Calls navigator.geolocation; on success
-              patches pinAddress with formatted coords. Decorative SVG map
-              stays decorative — real map SDK integration is out of scope
-              per plan.md. */}
-          <button type="button"
-            aria-label={t.useMyLocation || 'Utiliser ma position'}
-            disabled={geoBusy}
-            onClick={(event) => { event.stopPropagation(); useMyLocation(); }}
-            style={{
-              position: 'absolute', insetInlineEnd: 12, bottom: 12,
-              width: 40, height: 40, borderRadius: 12,
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: 'var(--shadow-sm)',
-              opacity: geoBusy ? 0.6 : 1,
-              cursor: geoBusy ? 'wait' : 'pointer',
-            }}>
-            {geoBusy ? (
-              <div style={{
-                width: 16, height: 16, borderRadius: '50%',
-                border: '2px solid var(--border)',
-                borderTopColor: 'var(--primary)',
-                animation: 'spin 0.8s linear infinite',
-              }}/>
-            ) : (
-              <Icons.Navigation size={18} style={{ color: 'var(--primary)' }}/>
-            )}
-          </button>
-        </div>
-      </div>
-      <div className="px-20 col gap-16 mt-16" style={{ paddingBottom: 100 }}>
-        <button type="button" onClick={dropPin} className="card-soft" style={{
-          padding: 14,
-          display: 'flex',
-          gap: 10,
-          alignItems: 'center',
-          textAlign: 'inherit',
-        }}>
-          <Icons.Pin size={20} style={{ color: hasPinAddress ? 'var(--primary)' : 'var(--text-3)' }}/>
-          <div className="col flex-1">
+      <div className="px-16 col gap-16" style={{ paddingBottom: 100 }}>
+        {/* Primary CTA — share your real GPS location. Was previously a small
+            arrow tucked inside a decorative SVG map; the map was misleading
+            (suggesting pan/zoom we can't deliver) so it's been removed
+            entirely. Real map rendering is gated on Google Geocoding work. */}
+        <Btn
+          variant={hasPinAddress ? 'soft' : 'primary'}
+          block
+          lg
+          disabled={geoBusy}
+          onClick={useMyLocation}
+          icon={geoBusy ? (
             <div style={{
-              fontWeight: 700,
-              fontSize: 14,
-              color: hasPinAddress ? 'var(--text)' : 'var(--text-3)',
-            }}>
-              {hasPinAddress ? data.pinAddress : (t.pinPlaceholder || '📍 Touchez la carte pour déposer un pin')}
-            </div>
-            <div className="t-tiny">{t.yourLocation}</div>
-          </div>
-          <span className="icon-btn" aria-hidden="true"><Icons.Edit size={16}/></span>
-        </button>
+              width: 16, height: 16, borderRadius: '50%',
+              border: '2px solid rgba(255,255,255,0.3)',
+              borderTopColor: 'currentColor',
+              animation: 'spin 0.8s linear infinite',
+            }}/>
+          ) : (
+            <Icons.Navigation size={18} />
+          )}>
+          {geoBusy
+            ? (t.useMyLocationBusy || 'Localisation…')
+            : (hasPinAddress
+                ? (t.useMyLocationRetry || 'Actualiser ma position')
+                : (t.useMyLocation || 'Utiliser ma position'))}
+        </Btn>
+
+        <Field label={t.yourLocation}>
+          <input
+            className="input"
+            placeholder={t.pinAddressPlaceholder || 'Adresse, point de repère ou coordonnées'}
+            value={data.pinAddress || ''}
+            onChange={(e) => patch({ pinAddress: e.target.value })}/>
+        </Field>
+
         {error && (
           <div className="t-tiny" role="alert" style={{ color: 'var(--danger)', fontWeight: 700 }}>
             {error}
@@ -1415,6 +1348,7 @@ function AddressPinStep({ t, data, patch, error, onNext }) {
             {geoErr}
           </div>
         )}
+
         <Field label={t.addressDetails}>
           <textarea className="input" rows={3}
             placeholder={t.addressDetailsPh}
