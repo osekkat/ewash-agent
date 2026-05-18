@@ -224,7 +224,7 @@ function App() {
             profile={profile}
             staffContact={staffContact}
             onClose={() => setModal(null)}
-            onComplete={() => { refreshProfile(); setModal(null); setTabLogged('bookings'); setToast(t.bookingConfirmed); }}/>
+            onComplete={() => { refreshProfile(); setModal(null); setTabLogged('home'); setToast(t.bookingConfirmed); }}/>
         )}
         {modal === 'support' && (
           <SupportScreen t={t} theme={theme} staffContact={staffContact}

@@ -13,7 +13,7 @@
  *   no-store` (see mobile-app/vercel.json), so browsers always revalidate it
  *   and the new version takes over on the next page load.
  */
-const SW_VERSION = '2026-05-18-confirmed-sub-staff-callback';
+const SW_VERSION = '2026-05-18-return-home-after-booking';
 const CACHE = `ewash-${SW_VERSION}`;
 const SW_LOG_LIMIT = 100;
 let swLogCount = 0;
