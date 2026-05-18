@@ -51,10 +51,10 @@ function _normalizeService(service) {
 function _servicesForCategory(bootstrap, category) {
   if (!bootstrap || !bootstrap.services || !category) return [];
   if (_isMotoCategory(category)) return (bootstrap.services.moto || []).map(_normalizeService);
-  return []
-    .concat(bootstrap.services.wash || [])
-    .concat(bootstrap.services.detailing || [])
-    .map(_normalizeService);
+  // Show only the wash bucket in the booking flow — matches the WhatsApp
+  // design where detailing is offered as a post-confirmation upsell via
+  // AddonsStep / _addonOptions, not as a primary service choice.
+  return (bootstrap.services.wash || []).map(_normalizeService);
 }
 
 function _addonOptions(bootstrap) {
