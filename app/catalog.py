@@ -17,6 +17,7 @@ from .config import settings
 from .db import init_db, make_engine, session_scope
 from .models import (
     AdminTextRow,
+    BookingNotificationSettingRow,
     CenterRow,
     ClosedDateRow,
     PromoCodeRow,
@@ -840,6 +841,12 @@ def compute_catalog_etag_seed(*, engine: Engine | None = None) -> str:
                 TimeSlotRow,
                 ClosedDateRow,
                 AdminTextRow,
+                # Included so /admin/notifications edits invalidate the
+                # bootstrap ETag — otherwise the PWA's 24h localStorage
+                # bootstrap cache serves a stale staff_contact phone after
+                # admins rotate it, and "Parler à l'équipe" deep-links
+                # to the old number.
+                BookingNotificationSettingRow,
             ):
                 max_dt = session.scalar(select(func.max(table_cls.updated_at)))
                 if max_dt is not None:
