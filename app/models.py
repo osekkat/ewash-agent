@@ -477,6 +477,82 @@ class WhatsappMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CashLedgerEntryRow(Base):
+    __tablename__ = "cash_ledger_entries"
+    __table_args__ = (
+        CheckConstraint("direction IN ('cash_in','cash_out','cash_transfer','cash_adjustment')", name="ck_cash_ledger_entries_direction"),
+        CheckConstraint("amount_minor >= 0", name="ck_cash_ledger_entries_amount_nonnegative"),
+        CheckConstraint("status IN ('recorded','needs_review','corrected','voided')", name="ck_cash_ledger_entries_status"),
+        Index("ix_cash_ledger_owner_occurred", "owner_phone", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_phone: Mapped[str] = mapped_column(String(32), default="", index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_by_phone: Mapped[str] = mapped_column(String(32), default="", index=True)
+    direction: Mapped[str] = mapped_column(String(24), index=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(8), default="MAD")
+    transaction_type: Mapped[str] = mapped_column(String(60), default="unknown", index=True)
+    category: Mapped[str] = mapped_column(String(60), default="uncategorized", index=True)
+    counterparty: Mapped[str] = mapped_column(String(160), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    raw_message_text: Mapped[str] = mapped_column(Text, default="")
+    source_channel: Mapped[str] = mapped_column(String(40), default="whatsapp", index=True)
+    source_message_id: Mapped[str] = mapped_column(String(160), default="", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(40), default="recorded", index=True)
+    review_reason: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    audit_events: Mapped[list["CashLedgerAuditEventRow"]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan", order_by="CashLedgerAuditEventRow.occurred_at"
+    )
+
+
+class CashLedgerAuditEventRow(Base):
+    __tablename__ = "cash_ledger_audit_events"
+    __table_args__ = (
+        CheckConstraint("event_type IN ('created','updated','corrected','voided','reviewed')", name="ck_cash_ledger_audit_events_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("cash_ledger_entries.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    actor_phone: Mapped[str] = mapped_column(String(32), default="", index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    before_json: Mapped[str] = mapped_column(Text, default="{}")
+    after_json: Mapped[str] = mapped_column(Text, default="{}")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    source_message_id: Mapped[str] = mapped_column(String(160), default="", index=True)
+
+    entry: Mapped[CashLedgerEntryRow] = relationship(back_populates="audit_events")
+
+
+class CashReconciliationRow(Base):
+    __tablename__ = "cash_reconciliations"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','confirmed','discrepancy')", name="ck_cash_reconciliations_status"),
+        UniqueConstraint("owner_phone", "business_date", name="uq_cash_reconciliations_owner_business_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_phone: Mapped[str] = mapped_column(String(32), default="", index=True)
+    business_date: Mapped[date] = mapped_column(Date, index=True)
+    opening_balance_minor: Mapped[int] = mapped_column(Integer, default=0)
+    cash_in_minor: Mapped[int] = mapped_column(Integer, default=0)
+    cash_out_minor: Mapped[int] = mapped_column(Integer, default=0)
+    expected_closing_balance_minor: Mapped[int] = mapped_column(Integer, default=0)
+    reported_closing_balance_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    difference_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ConversationSessionRow(Base):
     __tablename__ = "conversation_sessions"
     __table_args__ = (

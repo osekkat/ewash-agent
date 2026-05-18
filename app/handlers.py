@@ -10,6 +10,12 @@ from datetime import date, timedelta
 
 from . import catalog, meta, state
 from .booking import Booking
+from .cash_ledger import (
+    create_cash_ledger_entry,
+    entry_input_from_intent,
+    expected_cash_balance_minor,
+    parse_cash_ledger_intent,
+)
 from .config import settings
 from .persistence import (
     assign_booking_ref,
@@ -21,8 +27,10 @@ from .persistence import (
     persist_customer_name,
     persist_whatsapp_inbound_message,
     ReturningCustomerProfile,
+    _configured_engine,
 )
-from .notifications import notify_booking_confirmation
+from .db import session_scope
+from .notifications import InvalidPhone, normalize_phone, notify_booking_confirmation
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +52,63 @@ def _track_bot_stage(phone: str, sess) -> None:
         persist_customer_bot_stage(phone, sess.state, display_name=display_name)
     except Exception:
         log.exception("failed to persist bot stage phone=%s state=%s", phone, getattr(sess, "state", ""))
+
+
+def _format_mad(amount_minor: int) -> str:
+    whole, cents = divmod(abs(amount_minor), 100)
+    sign = "-" if amount_minor < 0 else ""
+    if cents:
+        return f"{sign}{whole:,}.{cents:02d} MAD".replace(",", " ")
+    return f"{sign}{whole:,} MAD".replace(",", " ")
+
+
+def _cash_ledger_owner_matches(phone: str) -> bool:
+    if not settings.cash_ledger_owner_phone:
+        return False
+    try:
+        return normalize_phone(phone) == normalize_phone(settings.cash_ledger_owner_phone)
+    except InvalidPhone:
+        return False
+
+
+async def _try_capture_cash_ledger_message(phone: str, message: dict, text: str | None) -> bool:
+    """Capture Omar's IDLE cash-movement WhatsApp notes into the ledger.
+
+    Returns True only when the message was transaction-related and handled, so
+    non-transaction assistant messages keep flowing through the normal bot.
+    """
+    if not text or not _cash_ledger_owner_matches(phone):
+        return False
+    intent = parse_cash_ledger_intent(text)
+    if intent is None:
+        return False
+    engine = _configured_engine()
+    if engine is None:
+        log.warning("cash ledger intent ignored because DATABASE_URL is not configured phone=%s", phone)
+        return False
+    owner_phone = normalize_phone(settings.cash_ledger_owner_phone)
+    with session_scope(engine) as session:
+        entry = create_cash_ledger_entry(
+            session,
+            entry_input_from_intent(
+                intent,
+                owner_phone=owner_phone,
+                created_by_phone=normalize_phone(phone),
+                raw_message_text=text,
+                source_message_id=message.get("id", ""),
+            ),
+        )
+        balance_minor = expected_cash_balance_minor(session, owner_phone=owner_phone)
+        marker = "+" if entry.direction == "cash_in" else "-" if entry.direction == "cash_out" else "±"
+        review = "\nCatégorie à revoir en fin de journée." if entry.status == "needs_review" else ""
+        counterparty = f" · {entry.counterparty}" if entry.counterparty else ""
+        await meta.send_text(
+            phone,
+            f"Noté Omar : {marker}{_format_mad(entry.amount_minor)} "
+            f"({entry.category}{counterparty}).\n"
+            f"Cash attendu en main : {_format_mad(balance_minor)}.{review}",
+        )
+    return True
 
 
 async def handle_message(message: dict, contact: dict | None = None) -> None:
@@ -75,6 +140,10 @@ async def handle_message(message: dict, contact: dict | None = None) -> None:
             _track_bot_stage(phone, state.get(phone))
             return
         await _send_menu(phone)
+        _track_bot_stage(phone, state.get(phone))
+        return
+
+    if current_state == "IDLE" and await _try_capture_cash_ledger_message(phone, message, text):
         _track_bot_stage(phone, state.get(phone))
         return
 

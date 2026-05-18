@@ -9,18 +9,23 @@ import hmac
 import logging
 import secrets
 import time
+from datetime import date
 from hashlib import sha256
 from html import escape
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import select
 
 from . import catalog
 from .admin_i18n import SUPPORTED_LOCALES, normalize_locale, t
 from .catalog import SERVICES_DETAILING, SERVICES_MOTO, SERVICES_WASH
+from .cash_ledger import cash_summary_for_day, expected_cash_balance_minor
 from .config import settings
-from .notifications import get_booking_notification_settings, upsert_booking_notification_settings
+from .db import session_scope
+from .models import CashLedgerEntryRow
+from .notifications import get_booking_notification_settings, normalize_phone, upsert_booking_notification_settings
 from .persistence import (
     BookingLockBusy,
     admin_booking_list,
@@ -29,6 +34,7 @@ from .persistence import (
     anonymize_customer,
     confirm_booking_by_ewash,
     recent_erasures,
+    _configured_engine,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -39,6 +45,7 @@ _NAV_ITEMS = (
     ("dashboard", "nav.dashboard", "/admin"),
     ("bookings", "nav.bookings", "/admin/bookings"),
     ("customers", "nav.customers", "/admin/customers"),
+    ("cash", "Cash", "/admin/cash"),
     ("erasures", "nav.erasures", "/admin/erasures"),
     ("prices", "nav.prices", "/admin/prices"),
     ("promos", "nav.promos", "/admin/promos"),
@@ -706,6 +713,70 @@ def _copy_page(*, locale: str, message: str = "", error: str = "") -> HTMLRespon
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/copy"), status_code=200)
 
 
+def _cash_page(*, locale: str) -> HTMLResponse:
+    title = "Cash"
+    engine = _configured_engine()
+    if engine is None or not settings.cash_ledger_owner_phone:
+        body = f"""
+        <div class="hero"><div><div class="eyebrow">Cash ledger</div><h1>{escape(title)}</h1></div></div>
+        <section class="empty-panel">
+          <h2>Not configured</h2>
+          <p>Set CASH_LEDGER_OWNER_PHONE to Omar's WhatsApp number and DATABASE_URL to enable the operational cash ledger.</p>
+        </section>
+        """
+        return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/cash"))
+
+    owner_phone = normalize_phone(settings.cash_ledger_owner_phone)
+    today = date.today()
+    with session_scope(engine) as session:
+        summary = cash_summary_for_day(session, owner_phone=owner_phone, business_date=today)
+        balance_minor = expected_cash_balance_minor(session, owner_phone=owner_phone)
+        entries = session.scalars(
+            select(CashLedgerEntryRow)
+            .where(CashLedgerEntryRow.owner_phone == owner_phone)
+            .order_by(CashLedgerEntryRow.occurred_at.desc(), CashLedgerEntryRow.id.desc())
+            .limit(100)
+        ).all()
+
+    rows = "".join(
+        "<div class='table-row' style='grid-template-columns:.9fr .65fr .8fr 1fr 1fr 1fr .8fr;'>"
+        f"<span>{escape(row.occurred_at.strftime('%Y-%m-%d %H:%M') if row.occurred_at else '')}</span>"
+        f"<span>{escape(row.direction)}</span>"
+        f"<span>{escape(_money_major(row.amount_minor))}</span>"
+        f"<span>{escape(row.category)}</span>"
+        f"<span>{escape(row.counterparty or '—')}</span>"
+        f"<span>{escape(row.status)}</span>"
+        f"<span>{escape(f'{row.confidence:.0%}')}</span>"
+        "</div>"
+        for row in entries
+    ) or "<div class='table-row'><span>No cash entries yet.</span><span></span><span></span></div>"
+    body = f"""
+    <div class="hero"><div><div class="eyebrow">Cash ledger assistant</div><h1>{escape(title)}</h1><p>Operational cash tracking for Omar. WhatsApp voice/text remains the primary input; this dashboard shows the ledger and review queue.</p></div></div>
+    <section class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Cash in today</div><div class="metric-value">{escape(_money_major(summary.cash_in_minor))}</div></div>
+      <div class="metric-card"><div class="metric-label">Cash out today</div><div class="metric-value">{escape(_money_major(summary.cash_out_minor))}</div></div>
+      <div class="metric-card"><div class="metric-label">Expected cash on hand</div><div class="metric-value">{escape(_money_major(balance_minor))}</div></div>
+      <div class="metric-card"><div class="metric-label">Needs review</div><div class="metric-value">{summary.needs_review_count}</div></div>
+    </section>
+    <section class="card" style="padding:18px;">
+      <h2>Recent ledger entries</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:.9fr .65fr .8fr 1fr 1fr 1fr .8fr;"><span>Date</span><span>Direction</span><span>Amount</span><span>Category</span><span>Counterparty</span><span>Status</span><span>Confidence</span></div>
+        {rows}
+      </div>
+    </section>
+    """
+    return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/cash"))
+
+
+def _money_major(amount_minor: int) -> str:
+    whole, cents = divmod(abs(int(amount_minor or 0)), 100)
+    sign = "-" if amount_minor < 0 else ""
+    if cents:
+        return f"{sign}{whole:,}.{cents:02d} MAD".replace(",", " ")
+    return f"{sign}{whole:,} MAD".replace(",", " ")
+
+
 def _placeholder_page(*, locale: str, page_key: str, active_path: str) -> HTMLResponse:
     title = t(page_key, locale)
     body = f"""
@@ -1249,6 +1320,8 @@ async def admin_section(request: Request, page_slug: str, lang: str | None = Que
         if erased is not None:
             message = t("admin.customers.erased", locale).format(count=erased)
         return _customers_page(locale=locale, message=message, error=error)
+    if page_id == "cash":
+        return _cash_page(locale=locale)
     if page_id == "erasures":
         actor = (request.query_params.get("actor") or "").strip()
         return _erasures_page(locale=locale, actor=actor)

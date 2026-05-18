@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     admin_cookie_secure: bool = True
     internal_cron_secret: str = ""
     admin_default_locale: str = "fr"
+    # Optional single-owner cash ledger assistant. When set to Omar's normalized
+    # WhatsApp number (digits only), IDLE WhatsApp messages from that phone that
+    # look like cash movements are captured into the operational cash ledger.
+    cash_ledger_owner_phone: str = ""
 
     # CORS for the PWA — comma-separated exact origins.
     allowed_origins: str = ""

@@ -14,6 +14,9 @@ from app.models import (
     BookingRefCounterRow,
     BookingRow,
     BookingStatusEventRow,
+    CashLedgerAuditEventRow,
+    CashLedgerEntryRow,
+    CashReconciliationRow,
     CenterRow,
     ClosedDateRow,
     ConversationEventRow,
@@ -78,6 +81,9 @@ def test_init_db_creates_v03_core_tables():
         "centers",
         "admin_texts",
         "booking_notification_settings",
+        "cash_ledger_entries",
+        "cash_ledger_audit_events",
+        "cash_reconciliations",
     }.issubset(tables)
     booking_uniques = {tuple(item["column_names"]) for item in inspect(engine).get_unique_constraints("bookings")}
     assert ("ref",) in booking_uniques
@@ -123,6 +129,31 @@ def test_init_db_creates_v03_core_tables():
     assert {"settings_key", "enabled", "phone_number", "template_name", "template_language"}.issubset(
         notification_columns
     )
+    cash_columns = {column["name"] for column in inspect(engine).get_columns("cash_ledger_entries")}
+    assert {
+        "owner_phone",
+        "direction",
+        "amount_minor",
+        "transaction_type",
+        "category",
+        "counterparty",
+        "raw_message_text",
+        "source_message_id",
+        "confidence",
+        "status",
+    }.issubset(cash_columns)
+    audit_columns = {column["name"] for column in inspect(engine).get_columns("cash_ledger_audit_events")}
+    assert {"entry_id", "event_type", "actor_phone", "before_json", "after_json", "reason"}.issubset(audit_columns)
+    reconciliation_columns = {column["name"] for column in inspect(engine).get_columns("cash_reconciliations")}
+    assert {
+        "owner_phone",
+        "business_date",
+        "opening_balance_minor",
+        "expected_closing_balance_minor",
+        "reported_closing_balance_minor",
+        "difference_minor",
+        "status",
+    }.issubset(reconciliation_columns)
 
     with session_scope(engine) as session:
         service_ids = {row.service_id for row in session.scalars(select(ServiceRow)).all()}
