@@ -181,7 +181,7 @@ window.I18N = {
     edit2: 'Modifier',
     // confirmation
     bookingConfirmed: 'Réservation confirmée',
-    confirmedSub: 'Notre équipe vous attendra à l’heure prévue',
+    confirmedSub: 'Notre équipe va vous contacter pour confirmer l’heure',
     bookingRef: 'Référence',
     addToCalendar: 'Ajouter au calendrier',
     // addons
@@ -428,7 +428,7 @@ window.I18N = {
     confirmBooking: 'تأكيد الحجز',
     edit2: 'تعديل',
     bookingConfirmed: 'تم تأكيد الحجز',
-    confirmedSub: 'سيكون فريقنا في الموعد',
+    confirmedSub: 'سيتواصل معك فريقنا لتأكيد الموعد',
     bookingRef: 'المرجع',
     addToCalendar: 'أضف إلى التقويم',
     addonOffer: 'عرض حصري',
