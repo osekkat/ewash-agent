@@ -454,7 +454,13 @@ button.chip:active { transform: scale(0.95); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px 8px;
+  /* padding-top includes env(safe-area-inset-top) so the bar clears the
+   * iOS status bar in every context — installed PWA, iOS Safari with
+   * viewport-fit=cover, and the desktop preview (where the env() value
+   * resolves to 0). Same reasoning as the @media-based fix on
+   * .bottom-nav: don't depend on the [data-pwa-standalone] JS attribute
+   * being set before first paint. */
+  padding: calc(10px + env(safe-area-inset-top)) 16px 8px;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   backdrop-filter: blur(12px) saturate(140%);
@@ -1116,9 +1122,6 @@ button.chip:active { transform: scale(0.95); }
   height: 100dvh;
   width: 100vw;
   max-width: 100vw;
-}
-[data-pwa-standalone] .appbar {
-  padding-top: calc(10px + env(safe-area-inset-top));
 }
 /* Pin .bottom-nav to the viewport bottom whenever we're in a context where
  * the desktop stage/EwashFrame isn't being used. The media query is used
