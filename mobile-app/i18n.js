@@ -67,6 +67,7 @@ window.I18N = {
     guestHint: 'Réservez pour personnaliser votre profil',
     enterName: 'Votre nom',
     namePlaceholder: 'Prénom et nom',
+    talkTeamMessage: "Bonjour Ewash, je souhaite discuter avec votre équipe.",
     // home
     bookNow: 'Réserver un lavage',
     bookCta: 'Prendre rendez-vous',
@@ -319,6 +320,7 @@ window.I18N = {
     guestHint: 'احجز لتخصيص ملفك الشخصي',
     enterName: 'اسمك',
     namePlaceholder: 'الاسم واللقب',
+    talkTeamMessage: 'مرحباً Ewash، أرغب في التحدث مع فريقكم.',
     bookNow: 'احجز غسيلاً',
     bookCta: 'احجز موعداً',
     nextAppointment: 'الموعد القادم',

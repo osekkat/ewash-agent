@@ -190,7 +190,7 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
               }}><Icons.Tag size={18}/></div>
               <div style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: '-0.005em' }}>{t.viewTariffs}</div>
             </button>
-            <button onClick={gotoSupport} className="card press" style={{
+            <button onClick={() => _openTeamChat(t, staffContact)} className="card press" style={{
               flex: 1, padding: 14, borderRadius: 18, textAlign: 'inherit',
               display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start',
               cursor: 'pointer',
@@ -300,6 +300,22 @@ function _openBookingHelp(booking, staffContact, fallback, intent) {
     return;
   }
   if (fallback) fallback();
+}
+
+// Home "Parler à l'équipe" tile. Opens the user's WhatsApp with a prefilled
+// message to the staff phone returned from /api/v1/bootstrap. If the bootstrap
+// hasn't populated staffContact yet (shouldn't happen in practice — bootstrap
+// runs at app launch in app.jsx), falls back to the generic wa.me URL that
+// lets the user pick a contact themselves.
+function _openTeamChat(t, staffContact) {
+  if (window.EwashLog) window.EwashLog.info('home.talk_team.opened', {});
+  const phone = staffContact && staffContact.whatsapp_phone;
+  const text = (t && t.talkTeamMessage) ||
+    "Bonjour Ewash, je souhaite discuter avec votre équipe.";
+  const url = phone
+    ? _waLinkFor(phone, text)
+    : ('https://wa.me/?text=' + encodeURIComponent(text));
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function HomeNextAppointmentSection({ t, openBooking, gotoSupport, staffContact }) {
