@@ -2071,6 +2071,49 @@ function ConfirmedStep({ t, lang, data, totalPrice, confirmedRef, confirmedTotal
   const displayedTotal = (confirmedTotal === null || confirmedTotal === undefined) ? totalPrice : confirmedTotal;
   const centerLabel = _centerLabel(centers, data.centerId);
   const slotLabel = _slotLabel(slots, data.time);
+  const slotHours = _slotStartMinutes({ id: data.time }) / 60;
+
+  const addToCalendar = () => {
+    const booking = {
+      ref,
+      date_iso: data.date && data.date.iso,
+      slot_id: data.time,
+      slot_label: slotLabel,
+      service_label: (data.service && data.service.name) || '',
+      location_label: data.locationKind === 'home' ? data.pinAddress : centerLabel,
+      status: 'pending_ewash_confirmation',
+    };
+    if (window.EwashLog) {
+      window.EwashLog.info('booking.confirmed.calendar', { ref });
+    }
+    if (window.EwashCalendar && window.EwashCalendar.download) {
+      try {
+        window.EwashCalendar.download(booking, lang);
+        return;
+      } catch (err) {
+        if (window.EwashLog) {
+          window.EwashLog.warn('booking.confirmed.calendar_error', {
+            ref,
+            error_code: (err && err.error_code) || 'calendar_export_failed',
+          });
+        }
+      }
+    }
+    // Fallback: Google Calendar template URL. Same approach as
+    // BookingsScreen detail modal (screens.jsx addToCalendar).
+    if (!booking.date_iso || !slotHours) return;
+    const date = booking.date_iso.replace(/-/g, '');
+    const startH = String(Math.floor(slotHours)).padStart(2, '0');
+    const endH = String(Math.floor(slotHours) + 2).padStart(2, '0');
+    const dates = date + 'T' + startH + '0000/' + date + 'T' + endH + '0000';
+    const title = 'Ewash ' + ref + ' — ' + booking.service_label;
+    const url = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
+      + '&text=' + encodeURIComponent(title)
+      + '&dates=' + dates
+      + '&location=' + encodeURIComponent(booking.location_label || '');
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   useE_b(() => {
     if (!ref) return;
     if (!window.EwashLog) return;
@@ -2174,11 +2217,11 @@ function ConfirmedStep({ t, lang, data, totalPrice, confirmedRef, confirmedTotal
           </div>
         </div>
 
-        <button className="card-soft" style={{
+        <button onClick={addToCalendar} className="card-soft press" style={{
           padding: 14, display: 'flex', gap: 10,
           alignItems: 'center', justifyContent: 'center',
           fontWeight: 600, fontSize: 13.5,
-          color: 'var(--text)', borderRadius: 14,
+          color: 'var(--text)', borderRadius: 14, cursor: 'pointer',
         }}>
           <Icons.Calendar size={18}/> {t.addToCalendar}
         </button>
