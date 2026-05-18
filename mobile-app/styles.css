@@ -589,6 +589,9 @@ button.chip:active { transform: scale(0.95); }
   0% { transform: translateX(-100%); }
   60%, 100% { transform: translateX(100%); }
 }
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 /* ============ Service card ============ */
 .svc-card {

@@ -1253,7 +1253,50 @@ function LocationStep({ t, centers, onHome, onCenter }) {
 // ─────────────────────────────────────────────────────────────
 function AddressPinStep({ t, data, patch, error, onNext }) {
   const hasPinAddress = !!(data.pinAddress || '').trim();
+  const [geoBusy, setGeoBusy] = useS_b(false);
+  const [geoErr, setGeoErr] = useS_b('');
   const dropPin = () => patch({ pinAddress: t.pinDroppedAddress || 'Position sélectionnée sur la carte' });
+  const useMyLocation = () => {
+    if (geoBusy) return;
+    setGeoErr('');
+    if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== 'function') {
+      setGeoErr(t.geoNotSupported || "La géolocalisation n'est pas disponible sur ce navigateur.");
+      return;
+    }
+    setGeoBusy(true);
+    if (window.EwashLog) window.EwashLog.info('booking.location.gps_request', {});
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGeoBusy(false);
+        const lat = pos.coords.latitude.toFixed(5);
+        const lng = pos.coords.longitude.toFixed(5);
+        // pin_address is a free-text string (LocationInfo.pin_address ≤200
+        // chars, no lat/lng fields accepted). Bake coords into the string so
+        // staff in /admin can paste them into Maps. Prefix with 📍 so it's
+        // visually distinct from the manual "Position sélectionnée" label.
+        patch({ pinAddress: '📍 ' + lat + ', ' + lng });
+        if (window.EwashLog) {
+          window.EwashLog.info('booking.location.gps_success', {
+            accuracy_m: Math.round(pos.coords.accuracy || 0),
+          });
+        }
+      },
+      (err) => {
+        setGeoBusy(false);
+        const denied = err && err.code === 1; // PERMISSION_DENIED
+        setGeoErr(denied
+          ? (t.geoDenied || 'Veuillez autoriser la géolocalisation dans les réglages.')
+          : (t.geoFailed || 'Impossible d\'obtenir votre position. Vous pouvez la saisir manuellement.'));
+        if (window.EwashLog) {
+          window.EwashLog.warn('booking.location.gps_error', {
+            error_code: denied ? 'permission_denied' : 'geolocation_failed',
+            code: err && err.code,
+          });
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  };
   return (
     <>
       <div className="px-20 col gap-6 mb-12">
@@ -1310,16 +1353,34 @@ function AddressPinStep({ t, data, patch, error, onNext }) {
             background: 'var(--primary)', opacity: 0.2,
             animation: 'ripple 2s infinite',
           }}/>
-          {/* recenter button */}
-          <button type="button" onClick={(event) => { event.stopPropagation(); dropPin(); }} style={{
-            position: 'absolute', insetInlineEnd: 12, bottom: 12,
-            width: 40, height: 40, borderRadius: 12,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: 'var(--shadow-sm)',
-          }}>
-            <Icons.Navigation size={18} style={{ color: 'var(--primary)' }}/>
+          {/* Use-my-location button. Calls navigator.geolocation; on success
+              patches pinAddress with formatted coords. Decorative SVG map
+              stays decorative — real map SDK integration is out of scope
+              per plan.md. */}
+          <button type="button"
+            aria-label={t.useMyLocation || 'Utiliser ma position'}
+            disabled={geoBusy}
+            onClick={(event) => { event.stopPropagation(); useMyLocation(); }}
+            style={{
+              position: 'absolute', insetInlineEnd: 12, bottom: 12,
+              width: 40, height: 40, borderRadius: 12,
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: 'var(--shadow-sm)',
+              opacity: geoBusy ? 0.6 : 1,
+              cursor: geoBusy ? 'wait' : 'pointer',
+            }}>
+            {geoBusy ? (
+              <div style={{
+                width: 16, height: 16, borderRadius: '50%',
+                border: '2px solid var(--border)',
+                borderTopColor: 'var(--primary)',
+                animation: 'spin 0.8s linear infinite',
+              }}/>
+            ) : (
+              <Icons.Navigation size={18} style={{ color: 'var(--primary)' }}/>
+            )}
           </button>
         </div>
       </div>
@@ -1347,6 +1408,11 @@ function AddressPinStep({ t, data, patch, error, onNext }) {
         {error && (
           <div className="t-tiny" role="alert" style={{ color: 'var(--danger)', fontWeight: 700 }}>
             {error}
+          </div>
+        )}
+        {geoErr && (
+          <div className="t-tiny" role="alert" style={{ color: 'var(--danger)', fontWeight: 700 }}>
+            {geoErr}
           </div>
         )}
         <Field label={t.addressDetails}>
