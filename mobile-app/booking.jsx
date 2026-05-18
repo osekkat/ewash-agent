@@ -2316,19 +2316,44 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
           borderRadius: 14, padding: '12px 14px', marginBottom: 18,
           position: 'relative',
         }}>
-          {addons.slice(0, 3).map((a) => (
-            <div key={a.id} className="row between" style={{ alignItems: 'baseline' }}>
-              <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.name}</span>
-              <div className="row gap-6" style={{ alignItems: 'baseline' }}>
-                <span className="t-num" style={{ fontWeight: 800, fontSize: 15.5 }}>
-                  {_addonPreviewPrice(a)} DH
-                </span>
-                <span style={{ fontSize: 10.5, opacity: 0.7, textDecoration: 'line-through' }}>
-                  {a.price_dh}
-                </span>
+          {addons.slice(0, 3).map((a) => {
+            const newPrice = _addonPreviewPrice(a);
+            const oldPrice = a.price_dh;
+            const savings = Math.max(0, oldPrice - newPrice);
+            return (
+              <div key={a.id} className="row between" style={{ alignItems: 'baseline' }}>
+                <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.name}</span>
+                <div className="row gap-8" style={{ alignItems: 'baseline' }}>
+                  <span style={{
+                    fontSize: 13.5,
+                    fontWeight: 600,
+                    opacity: 0.6,
+                    textDecoration: 'line-through',
+                  }}>
+                    {oldPrice} DH
+                  </span>
+                  <span className="t-num" style={{ fontWeight: 800, fontSize: 16.5 }}>
+                    {newPrice} DH
+                  </span>
+                  {savings > 0 && (
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 800,
+                      padding: '2px 7px',
+                      borderRadius: 999,
+                      background: variant === 'premium'
+                        ? 'var(--gold)' : '#FFFFFF',
+                      color: variant === 'premium'
+                        ? '#0a0a0a' : '#1A6B0F',
+                      letterSpacing: '0.02em',
+                    }}>
+                      −{savings}
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <button onClick={onAccept} style={{
