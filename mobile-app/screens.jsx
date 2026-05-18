@@ -1574,7 +1574,10 @@ function SupportScreen({ t, onBack, theme, staffContact }) {
     }, 800);
   };
   return (
-    <div className="col" style={{ flex: 1, background: 'var(--bg)' }}>
+    // minHeight: 0 needed for the .app-scroll child to scroll properly when
+    // the message list exceeds viewport — same flex-column-min-height fix
+    // as BookingFlow.
+    <div className="col" style={{ flex: 1, minHeight: 0, background: 'var(--bg)' }}>
       <TopBar onBack={onBack}
         title={t.supportTitle}
         t={t}

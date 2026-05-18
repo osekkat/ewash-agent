@@ -766,7 +766,12 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, st
 
   // ───── render
   return (
-    <div className="col" style={{ flex: 1, background: 'var(--bg)' }}>
+    // minHeight: 0 is load-bearing — without it, this flex column's
+    // min-height defaults to "auto" (content-driven), which makes the
+    // .app-scroll child grow with its content instead of scrolling.
+    // The bug surfaced when the recap step got a name row (commit ecefe30)
+    // and the total content height crossed 100dvh on iPhones.
+    <div className="col" style={{ flex: 1, minHeight: 0, background: 'var(--bg)' }}>
       <BookingHeader
         t={t} step={step} onBack={back} onClose={onClose}
         staffContact={staffContact}
