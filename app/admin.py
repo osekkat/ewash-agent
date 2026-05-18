@@ -21,7 +21,12 @@ from sqlalchemy import select
 from . import catalog
 from .admin_i18n import SUPPORTED_LOCALES, normalize_locale, t
 from .catalog import SERVICES_DETAILING, SERVICES_MOTO, SERVICES_WASH
-from .cash_ledger import cash_summary_for_day, expected_cash_balance_minor
+from .cash_ledger import (
+    CASH_LEDGER_CATEGORIES,
+    cash_summary_for_day,
+    expected_cash_balance_minor,
+    review_cash_ledger_category,
+)
 from .config import settings
 from .db import session_scope
 from .models import CashLedgerEntryRow
@@ -57,6 +62,28 @@ _NAV_ITEMS = (
     ("copy", "nav.copy", "/admin/copy"),
 )
 _PAGE_BY_SLUG = {path.rsplit("/", 1)[-1]: (page_id, key, path) for page_id, key, path in _NAV_ITEMS if path != "/admin"}
+_CASH_CATEGORY_OPTIONS = (
+    "uncategorized",
+    "bank",
+    "customer_payment",
+    "staff_labor",
+    "staff_advance",
+    "fuel",
+    "parking",
+    "tolls",
+    "supplies",
+    "cleaning_products",
+    "equipment",
+    "vehicle_maintenance",
+    "rent_or_site_fee",
+    "phone_internet",
+    "meals",
+    "transport",
+    "supplier_payment",
+    "owner_draw",
+    "other_cash_in",
+    "other_cash_out",
+)
 
 
 def _session_signature(timestamp: str) -> str:
@@ -713,6 +740,23 @@ def _copy_page(*, locale: str, message: str = "", error: str = "") -> HTMLRespon
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/copy"), status_code=200)
 
 
+def _cash_category_select(row: CashLedgerEntryRow, *, locale: str) -> str:
+    options = "".join(
+        f'<option value="{escape(category)}"{selected}>'
+        f'{escape(category.replace("_", " "))}</option>'
+        for category in _CASH_CATEGORY_OPTIONS
+        if category in CASH_LEDGER_CATEGORIES
+        for selected in (" selected" if category == row.category else "",)
+    )
+    return (
+        f'<form class="inline-form" method="post" action="/admin/cash/category?lang={escape(locale)}">'
+        f'<input type="hidden" name="entry_id" value="{row.id}">'
+        f'<select name="category" aria-label="Category for cash entry {row.id}">{options}</select>'
+        '<button type="submit">Save</button>'
+        '</form>'
+    )
+
+
 def _cash_page(*, locale: str) -> HTMLResponse:
     title = "Cash"
     engine = _configured_engine()
@@ -739,11 +783,11 @@ def _cash_page(*, locale: str) -> HTMLResponse:
         ).all()
 
     rows = "".join(
-        "<div class='table-row' style='grid-template-columns:.9fr .65fr .8fr 1fr 1fr 1fr .8fr;'>"
+        "<div class='table-row' style='grid-template-columns:.9fr .65fr .8fr 1.65fr 1fr 1fr .8fr;'>"
         f"<span>{escape(row.occurred_at.strftime('%Y-%m-%d %H:%M') if row.occurred_at else '')}</span>"
         f"<span>{escape(row.direction)}</span>"
         f"<span>{escape(_money_major(row.amount_minor))}</span>"
-        f"<span>{escape(row.category)}</span>"
+        f"<span>{_cash_category_select(row, locale=locale)}</span>"
         f"<span>{escape(row.counterparty or '—')}</span>"
         f"<span>{escape(row.status)}</span>"
         f"<span>{escape(f'{row.confidence:.0%}')}</span>"
@@ -761,7 +805,7 @@ def _cash_page(*, locale: str) -> HTMLResponse:
     <section class="card" style="padding:18px;">
       <h2>Recent ledger entries</h2>
       <div class="table-shell">
-        <div class="table-row table-head" style="grid-template-columns:.9fr .65fr .8fr 1fr 1fr 1fr .8fr;"><span>Date</span><span>Direction</span><span>Amount</span><span>Category</span><span>Counterparty</span><span>Status</span><span>Confidence</span></div>
+        <div class="table-row table-head" style="grid-template-columns:.9fr .65fr .8fr 1.65fr 1fr 1fr .8fr;"><span>Date</span><span>Direction</span><span>Amount</span><span>Category</span><span>Counterparty</span><span>Status</span><span>Confidence</span></div>
         {rows}
       </div>
     </section>
@@ -1180,6 +1224,40 @@ def _auth_or_none(request: Request, locale: str):
     if not _valid_session_token(request.cookies.get(_SESSION_COOKIE)):
         return _password_form(locale=locale)
     return None
+
+
+@router.post("/cash/category", response_class=HTMLResponse)
+async def admin_cash_category_submit(request: Request, lang: str | None = Query(default=None)):
+    locale = normalize_locale(lang or settings.admin_default_locale)
+    if response := _auth_or_none(request, locale):
+        return response
+    engine = _configured_engine()
+    if engine is None or not settings.cash_ledger_owner_phone:
+        return RedirectResponse(url=f"/admin/cash?lang={locale}", status_code=status.HTTP_303_SEE_OTHER)
+
+    form = await _admin_form(request)
+    owner_phone = normalize_phone(settings.cash_ledger_owner_phone)
+    session_token = request.cookies.get(_SESSION_COOKIE) or ""
+    session_ts = session_token.split(":", 1)[0] if ":" in session_token else "anon"
+    client_host = (request.client.host if request.client else "") or "unknown"
+    actor = f"admin:{session_ts}:{client_host}"[:64]
+    try:
+        entry_id = int(form.get("entry_id", ["0"])[0] or 0)
+        category = (form.get("category", [""])[0] or "").strip()
+        with session_scope(engine) as session:
+            entry = session.get(CashLedgerEntryRow, entry_id)
+            if entry is None or entry.owner_phone != owner_phone:
+                raise ValueError("cash ledger entry not found")
+            review_cash_ledger_category(
+                session,
+                entry_id=entry_id,
+                actor_phone=actor,
+                category=category,
+            )
+    except Exception as exc:
+        log.warning("admin.cash.category_update_failed error=%s", exc)
+        return RedirectResponse(url=f"/admin/cash?lang={locale}&error=category", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/admin/cash?lang={locale}&updated=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/reminders", response_class=HTMLResponse)

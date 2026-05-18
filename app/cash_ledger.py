@@ -325,6 +325,49 @@ def correct_cash_ledger_entry(
     return entry
 
 
+def review_cash_ledger_category(
+    session: Session,
+    *,
+    entry_id: int,
+    actor_phone: str,
+    category: str,
+    reason: str = "admin category update",
+) -> CashLedgerEntryRow:
+    """Update a ledger entry category from the dashboard and audit the review.
+
+    Category cleanup should resolve the normal `uncategorized` review state
+    without marking the financial transaction itself as corrected.
+    """
+    if category not in CASH_LEDGER_CATEGORIES:
+        raise ValueError(f"unknown cash ledger category: {category}")
+    entry = session.get(CashLedgerEntryRow, entry_id)
+    if entry is None:
+        raise ValueError(f"cash ledger entry not found: {entry_id}")
+    if entry.status == "voided":
+        raise ValueError("voided cash ledger entries cannot be reviewed")
+
+    before = _entry_snapshot(entry)
+    entry.category = category
+    if category == "uncategorized":
+        entry.status = "needs_review"
+        entry.review_reason = entry.review_reason or "category_unclear"
+    else:
+        entry.status = "recorded"
+        entry.review_reason = ""
+    entry.updated_at = utcnow()
+    session.flush()
+    _add_audit_event(
+        session,
+        entry=entry,
+        event_type="reviewed",
+        actor_phone=actor_phone,
+        before=before,
+        after=_entry_snapshot(entry),
+        reason=reason,
+    )
+    return entry
+
+
 def expected_cash_balance_minor(session: Session, *, owner_phone: str) -> int:
     rows = session.execute(
         select(CashLedgerEntryRow.direction, func.coalesce(func.sum(CashLedgerEntryRow.amount_minor), 0))
