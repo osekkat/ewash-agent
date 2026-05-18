@@ -647,6 +647,28 @@
     });
   }
 
+  async function getMyVehicles() {
+    // Returns past vehicles for the token bearer so the booking flow can
+    // offer one-tap re-selection. Returns null (not an error) for first-
+    // time users with no token — caller treats null as "no history, show
+    // the manual flow" rather than rendering an error.
+    const token = _getToken();
+    if (!token) return null;
+    try {
+      return await _fetchWithRetry("/api/v1/me/vehicles", {
+        headers: { "X-Ewash-Token": token },
+      });
+    } catch (err) {
+      // Token might have been revoked server-side or be from a previous
+      // dev environment. Don't escalate — fall back to the manual flow.
+      if (err && (err.status === 401 || err.error_code === "invalid_token")) {
+        EwashLog.info("me.vehicles.invalid_token_silent", {});
+        return null;
+      }
+      throw err;
+    }
+  }
+
   async function revokeToken(params) {
     const token = _getToken();
     if (!token) {
@@ -695,6 +717,7 @@
     validatePromo: validatePromo,
     submitBooking: submitBooking,
     getMyBookings: getMyBookings,
+    getMyVehicles: getMyVehicles,
     revokeToken: revokeToken,
     deleteMe: deleteMe,
   };

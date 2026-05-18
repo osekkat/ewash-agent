@@ -200,6 +200,22 @@ class BookingsListResponse(BaseModel):
     next_cursor: Optional[str] = None
 
 
+# ── Vehicle history (token-scoped, for "use a previous car" quick-pick) ──
+
+
+class VehicleHistoryItem(BaseModel):
+    category: str  # "A" | "B" | "C" | "MOTO" — matches BookingCreateRequest.category
+    category_label: str  # Clean label per VEHICLE_CATEGORY_LABEL (no leading letter / emoji)
+    make: str  # Free-text model/brand the customer typed last time, e.g. "Audi Q7"
+    color: str  # Free-text color, e.g. "Blanc". Empty string for moto.
+    label: str  # Pre-rendered display label, e.g. "Audi Q7 · Blanc". Empty if no make/color.
+    last_used_at: Optional[str] = None  # ISO-8601 UTC
+
+
+class VehicleHistoryResponse(BaseModel):
+    vehicles: list[VehicleHistoryItem]
+
+
 # ── Token revoke (PWA logout) ─────────────────────────────────────────────
 
 

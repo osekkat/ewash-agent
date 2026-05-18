@@ -35,6 +35,8 @@ from app.api_schemas import (
     TimeSlotOut,
     TokenRevokeRequest,
     TokenRevokeResponse,
+    VehicleHistoryItem,
+    VehicleHistoryResponse,
 )
 from app.config import settings
 from app.notifications import InvalidPhone
@@ -1146,6 +1148,82 @@ async def list_bookings(
     return BookingsListResponse(
         bookings=[BookingListItemOut(**item) for item in items],
         next_cursor=next_cursor,
+    )
+
+
+# ── Vehicle history (token-scoped, "use a previous car" quick-pick) ──────
+
+
+@router.get("/me/vehicles", response_model=VehicleHistoryResponse)
+@limiter.limit(settings.rate_limit_bookings_list_per_token, key_func=_token_key_func)
+@limiter.limit(settings.rate_limit_token_endpoints_per_ip, key_func=get_remote_address)
+async def list_my_vehicles(
+    request: Request,
+    response: Response,
+) -> VehicleHistoryResponse | JSONResponse:
+    """Return deduped past vehicles for the X-Ewash-Token bearer.
+
+    Feeds the booking flow's CategoryStep so returning customers can tap
+    a card instead of retyping make/color. Same auth model as
+    GET /api/v1/bookings — token-only, no ``?phone=`` parameter.
+
+    The category_label is injected here (not in persistence) so the
+    storage layer stays agnostic of display text.
+    """
+    del response
+    started = time.perf_counter()
+
+    if "phone" in request.query_params:
+        logger.warning(
+            "me.vehicles error=phone_param_not_accepted ip_hash=%s",
+            _hash_for_log(get_remote_address(request) or ""),
+        )
+        return _json_error(
+            400,
+            "phone_param_not_accepted",
+            "Pass the customer token via X-Ewash-Token; phone enumeration is not supported.",
+        )
+
+    token = request.headers.get("X-Ewash-Token", "")
+    if not token:
+        logger.warning(
+            "me.vehicles error=missing_token ip_hash=%s",
+            _hash_for_log(get_remote_address(request) or ""),
+        )
+        return _json_error(401, "missing_token", "X-Ewash-Token required")
+
+    matched_phone = persistence.verify_customer_token(token)
+    if matched_phone is None:
+        logger.warning(
+            "me.vehicles error=invalid_token token_prefix=%s ip_hash=%s",
+            hash_token(token)[:8],
+            _hash_for_log(get_remote_address(request) or ""),
+        )
+        return _json_error(401, "invalid_token", "Token not recognized")
+
+    items = persistence.list_customer_vehicles_for_token(token)
+    request.state.phone_normalized = matched_phone
+
+    duration_ms = (time.perf_counter() - started) * 1000
+    logger.info(
+        "me.vehicles phone_hash=%s count=%d ip_hash=%s duration_ms=%.1f",
+        _hash_for_log(matched_phone),
+        len(items),
+        _hash_for_log(get_remote_address(request) or ""),
+        duration_ms,
+    )
+    return VehicleHistoryResponse(
+        vehicles=[
+            VehicleHistoryItem(
+                category=item.category,
+                category_label=catalog.VEHICLE_CATEGORY_LABEL.get(item.category, ""),
+                make=item.make,
+                color=item.color,
+                label=item.label,
+                last_used_at=item.last_used_at.isoformat() if item.last_used_at else None,
+            )
+            for item in items
+        ],
     )
 
 

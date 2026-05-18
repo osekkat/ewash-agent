@@ -419,6 +419,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, st
   const [submitDisabledUntil, setSubmitDisabledUntil] = useS_b(0);
   const [clockTick, setClockTick] = useS_b(Date.now());
   const [isOnline, setIsOnline] = useS_b(_isBrowserOnline());
+  const [vehicleHistory, setVehicleHistory] = useS_b([]);
 
   const kind = _isMotoCategory(data.category) ? 'moto' : 'car';
   const stepperSteps = kind === 'moto' ? STEPS_MOTO : STEPS_CAR;
@@ -509,6 +510,31 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, st
       });
     return () => { alive = false; };
   }, [bootstrapRetry]);
+
+  // Fetch the user's past vehicles when the booking flow opens (once per
+  // mount). Failure is non-blocking — the manual category step still
+  // works for everyone. First-time users (no token) get back null and we
+  // leave the section empty.
+  useE_b(() => {
+    if (!window.EwashAPI || !window.EwashAPI.getMyVehicles) return undefined;
+    let alive = true;
+    window.EwashAPI.getMyVehicles()
+      .then((payload) => {
+        if (!alive) return;
+        const vehicles = (payload && Array.isArray(payload.vehicles)) ? payload.vehicles : [];
+        setVehicleHistory(vehicles);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        if (window.EwashLog) {
+          window.EwashLog.warn('booking.vehicle_history.fetch_failed', {
+            error_code: (err && err.error_code) || 'fetch_failed',
+            status: err && err.status,
+          });
+        }
+      });
+    return () => { alive = false; };
+  }, []);
 
   useE_b(() => {
     if (!data.category) return undefined;
@@ -821,11 +847,33 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, st
           </div>
         )}
         {step === 'category' && (
-          <CategoryStep t={t} data={data} patch={patch} categories={categoriesList} onNext={() => {
-            // moto skips vehicle details + promo step
-            if (_isMotoCategory(data.category)) goTo('location');
-            else goTo('vehicle');
-          }}/>
+          <CategoryStep
+            t={t}
+            data={data}
+            patch={patch}
+            categories={categoriesList}
+            vehicleHistory={vehicleHistory}
+            onPickPastVehicle={(v) => {
+              // Returning customer: skip CategoryStep + VehicleStep entirely
+              // since make/color come from the saved profile. Same target
+              // ('location') for moto and car since both branches skip the
+              // vehicle-detail entry.
+              patch({
+                category: v.category,
+                make: v.make || '',
+                color: v.color || '',
+                service: null,
+                addons: [],
+                promoCode: null,
+                promoApplied: false,
+              });
+              goTo('location');
+            }}
+            onNext={() => {
+              // moto skips vehicle details + promo step
+              if (_isMotoCategory(data.category)) goTo('location');
+              else goTo('vehicle');
+            }}/>
         )}
         {step === 'vehicle' && (
           <VehicleStep t={t} data={data} patch={patch} onNext={() => goTo('location')}/>
@@ -1103,7 +1151,9 @@ function OfflineCard({ t, booking, slots, staffContact }) {
 // ─────────────────────────────────────────────────────────────
 // STEP: Category
 // ─────────────────────────────────────────────────────────────
-function CategoryStep({ t, data, patch, categories, onNext }) {
+function CategoryStep({ t, data, patch, categories, vehicleHistory, onPickPastVehicle, onNext }) {
+  const pastVehicles = Array.isArray(vehicleHistory) ? vehicleHistory : [];
+  const hasHistory = pastVehicles.length > 0;
   return (
     <>
       <div className="px-20 col gap-6 mb-16">
@@ -1111,6 +1161,57 @@ function CategoryStep({ t, data, patch, categories, onNext }) {
         <div className="t-muted">{t.chooseCategorySub}</div>
       </div>
       <div className="px-16 col gap-10 anim-stagger" style={{ paddingBottom: 100 }}>
+        {hasHistory && (
+          <>
+            <div className="t-tiny" style={{
+              fontWeight: 700, letterSpacing: '0.08em',
+              color: 'var(--text-2)', textTransform: 'uppercase',
+              marginTop: 4,
+            }}>
+              {t.myVehicles || 'Mes véhicules'}
+            </div>
+            {pastVehicles.map((v, i) => {
+              const Icon = _categoryIcon(v.category);
+              return (
+                <button
+                  key={`hist-${i}`}
+                  type="button"
+                  onClick={() => onPickPastVehicle && onPickPastVehicle(v)}
+                  className="card card-elev press"
+                  style={{
+                    padding: 14, display: 'flex', gap: 12,
+                    alignItems: 'center', textAlign: 'inherit',
+                    cursor: 'pointer', borderRadius: 16,
+                  }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 12,
+                    background: 'var(--primary-soft)',
+                    color: 'var(--primary-soft-text)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    <Icon size={22}/>
+                  </div>
+                  <div className="col flex-1" style={{ minWidth: 0, gap: 2 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14.5 }}>
+                      {v.label || [v.make, v.color].filter(Boolean).join(' · ') || (v.category_label || '')}
+                    </div>
+                    <div className="t-tiny" style={{ color: 'var(--text-2)' }}>
+                      {v.category_label || ''}
+                    </div>
+                  </div>
+                  <Icons.ChevronRight size={18} style={{ color: 'var(--text-3)' }}/>
+                </button>
+              );
+            })}
+            <div className="t-tiny" style={{
+              fontWeight: 600, color: 'var(--text-3)',
+              marginTop: 8, marginBottom: 2,
+            }}>
+              {t.orPickCategory || 'Ou choisissez une catégorie'}
+            </div>
+          </>
+        )}
         {categories.map(c => {
           const Icon = _categoryIcon(c.id);
           return (

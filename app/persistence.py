@@ -1862,6 +1862,79 @@ def list_bookings_for_token(
         return [_to_customer_view(row) for row in page_rows], next_cursor
 
 
+@dataclass(frozen=True)
+class CustomerVehicleHistoryItem:
+    """Token-scoped view of a customer's previously-used vehicle.
+
+    Fed back to the PWA on the booking flow's first step so returning
+    customers can tap a card instead of re-typing make/color. Only fields
+    safe to expose to the device are included — no internal IDs, no
+    timestamps beyond `last_used_at` for ordering.
+    """
+
+    category: str  # A | B | C | MOTO
+    make: str  # normalized model string the customer typed previously
+    color: str  # normalized color string (empty for moto)
+    label: str  # pre-rendered display string ("Audi Q7 — Blanc")
+    last_used_at: datetime | None
+
+
+def list_customer_vehicles_for_token(
+    token_plaintext: str | None,
+    *,
+    limit: int = 10,
+    engine: Engine | None = None,
+) -> list[CustomerVehicleHistoryItem]:
+    """Return the active customer_vehicles rows owned by the token bearer.
+
+    Pattern mirrors `list_bookings_for_token`: token → phone via
+    `verify_customer_token` (which also bumps last_used_at on the token
+    row), then a single query against customer_vehicles ordered by
+    last_used_at DESC. No `?phone=` parameter exists at the route level,
+    so phone enumeration is mechanically impossible.
+
+    The query returns at most `limit` rows; the table is already deduped
+    by (customer_phone, category, model, color) via _find_or_create_vehicle
+    so no further dedup is required here.
+    """
+    if not token_plaintext:
+        return []
+    db_engine = _engine_or_configured(engine)
+    if db_engine is None:
+        return []
+    phone = verify_customer_token(token_plaintext, engine=db_engine)
+    if phone is None:
+        return []
+
+    bounded_limit = max(0, min(int(limit), 20))
+    if bounded_limit == 0:
+        return []
+
+    with session_scope(db_engine) as session:
+        rows = session.scalars(
+            select(CustomerVehicle)
+            .where(
+                CustomerVehicle.customer_phone == phone,
+                CustomerVehicle.active.is_(True),
+            )
+            .order_by(
+                CustomerVehicle.last_used_at.desc().nullslast(),
+                CustomerVehicle.id.desc(),
+            )
+            .limit(bounded_limit)
+        ).all()
+        return [
+            CustomerVehicleHistoryItem(
+                category=(row.category or "").upper(),
+                make=row.model or "",
+                color=row.color or "",
+                label=row.label or "",
+                last_used_at=row.last_used_at,
+            )
+            for row in rows
+        ]
+
+
 def _encode_customer_bookings_cursor(row: BookingRow) -> str:
     created_at = row.created_at.isoformat() if row.created_at else ""
     payload = f"{created_at}|{row.id}"
