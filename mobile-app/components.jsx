@@ -15,15 +15,20 @@ function Wordmark({ size = 24, color }) {
 }
 
 function LogoStack({ variant }) {
-  const useImg = variant === 'eco';
+  // Eco splash kept the full ewash-logo.png (mark + wordmark) for a big
+  // brand statement; premium previously fell back to the SVG glyph and
+  // now uses ewash_logo_only.png — the same mark-only asset already on
+  // the appbar and language picker, sized larger to suit a splash slot.
+  const isEco = variant === 'eco';
   return (
     <div className="col gap-8" style={{ alignItems: 'center' }}>
-      {useImg ? (
-        <img src="assets/ewash-logo.png" width={92} height={92}
-          alt="ewash" style={{ display: 'block' }} />
-      ) : (
-        <Icons.Logo size={70} style={{ color: 'var(--primary)' }} />
-      )}
+      <img
+        src={isEco ? 'assets/ewash-logo.png' : 'assets/ewash_logo_only.png'}
+        width={isEco ? 92 : 76}
+        height={isEco ? 92 : 76}
+        alt="ewash"
+        style={{ display: 'block' }}
+      />
     </div>
   );
 }
