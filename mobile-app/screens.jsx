@@ -51,7 +51,8 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
     <div className="app-scroll">
       <div className="appbar">
         <div className="row gap-10">
-          <Icons.Logo size={30} style={{ color: 'var(--primary)' }} />
+          <img src="assets/ewash-logo.png" width={32} height={32} alt="ewash"
+            style={{ display: 'block', flexShrink: 0 }}/>
           {profile.name ? (
             <div className="col" style={{ gap: 2 }}>
               <div className="t-tiny" style={{ color: 'var(--text-2)', fontWeight: 600 }}>
