@@ -61,7 +61,8 @@ function LangScreen({ onDone, t, lang, setLang }) {
   return (
     <div className="col" style={{ flex: 1 }}>
       <div className="col gap-16 px-20" style={{ paddingTop: 32 }}>
-        <Icons.Logo size={42} style={{ color: 'var(--primary)' }} />
+        <img src="assets/ewash_logo_only.png" width={44} height={44} alt="ewash"
+          style={{ display: 'block' }}/>
         <div className="col gap-6">
           <div className="t-h1">{t.chooseLang}</div>
           <div className="t-muted">Select your language · اختر لغتك</div>
