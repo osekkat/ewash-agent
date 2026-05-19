@@ -14,7 +14,7 @@ window.I18N = {
       deepLinkMessage: "Bonjour Ewash, j'ai besoin d'aide depuis l'application (écran: {screen}).",
     },
     // splash & auth
-    tagline: 'Lavage auto écologique sans eau',
+    tagline: 'Lavage auto sans eau',
     continue: 'Continuer',
     next: 'Suivant',
     back: 'Retour',
@@ -274,7 +274,7 @@ window.I18N = {
     help: {
       deepLinkMessage: 'مرحباً Ewash، أحتاج إلى مساعدة من التطبيق (الشاشة: {screen}).',
     },
-    tagline: 'غسيل سيارات بيئي بدون ماء',
+    tagline: 'غسيل سيارات بدون ماء',
     continue: 'متابعة',
     next: 'التالي',
     back: 'رجوع',

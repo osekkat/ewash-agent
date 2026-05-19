@@ -98,13 +98,22 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
           <div style={{
             fontFamily: 'var(--font-display)', fontWeight: 800,
             fontSize: 28, lineHeight: 1.05, color: '#fff',
-            marginBottom: 10, position: 'relative', zIndex: 1,
+            marginBottom: 8, position: 'relative', zIndex: 1,
             letterSpacing: '-0.02em', maxWidth: 240,
           }}>
             {lang === 'ar' ? 'سيارة نظيفة، بدون قطرة ماء.' : 'Voiture propre,\nzéro goutte d’eau.'}
           </div>
+          <div style={{
+            fontFamily: 'var(--font-display)', fontWeight: 700,
+            fontSize: 18, color: '#fff',
+            letterSpacing: '-0.01em',
+            marginBottom: 6, position: 'relative', zIndex: 1,
+            opacity: 0.95,
+          }}>
+            e-wash
+          </div>
           <div style={{ color: 'rgba(255,255,255,0.78)', fontSize: 13.5, marginBottom: 18, position: 'relative', zIndex: 1, maxWidth: 250 }}>
-            {t.tagline} · Casablanca
+            {t.tagline}
           </div>
           <button onClick={openBooking}
             className="press"
