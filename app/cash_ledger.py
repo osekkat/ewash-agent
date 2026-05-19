@@ -34,6 +34,7 @@ CASH_LEDGER_CATEGORIES = {
     "meals",
     "transport",
     "supplier_payment",
+    "tips",
     "owner_draw",
     "other_cash_in",
     "other_cash_out",
@@ -48,9 +49,10 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("vehicle_maintenance", ("maintenance", "repair", "réparation", "reparation", "garage", "pneu")),
     ("equipment", ("equipment", "matériel", "materiel", "machine")),
     ("supplies", ("supplies", "towels", "serviettes", "microfibre", "achat")),
-    ("meals", ("meal", "lunch", "dinner", "coffee", "déjeuner", "dejeuner", "café", "cafe")),
+    ("meals", ("meal", "lunch", "dinner", "food", "nourriture", "coffee", "déjeuner", "dejeuner", "café", "cafe")),
     ("transport", ("taxi", "transport", "train", "bus")),
     ("staff_labor", ("staff", "washer", "laveur", "employee", "employé", "employe", "labor", "main d")),
+    ("tips", ("tip", "tips", "pourboire")),
 )
 
 _CASH_IN_WORDS = (
@@ -199,6 +201,106 @@ def parse_cash_ledger_intent(text: str) -> CashLedgerIntent | None:
         confidence=confidence,
         review_reason=review_reason,
     )
+
+
+def _transaction_type_for_context(
+    *,
+    prefix: str,
+    nearby: str,
+    active_direction: str,
+) -> tuple[str, str] | None:
+    """Infer direction/type for one amount inside a compound WhatsApp message."""
+    if _contains_any(prefix, _BANK_WITHDRAWAL_WORDS) or _contains_any(nearby, _BANK_WITHDRAWAL_WORDS):
+        return "cash_in", "bank_withdrawal"
+    if _contains_any(prefix, _BANK_DEPOSIT_WORDS) or _contains_any(nearby, _BANK_DEPOSIT_WORDS):
+        return "cash_out", "bank_deposit"
+    if _contains_any(prefix, ("received", "reçu", "recu", "collected", "encaissé", "encaisse")):
+        return "cash_in", "cash_received"
+    if _contains_any(prefix, _CASH_OUT_WORDS):
+        return "cash_out", "cash_payment"
+    if active_direction == "cash_out":
+        return "cash_out", "cash_payment"
+    if active_direction == "cash_in":
+        return "cash_in", "cash_received"
+    if _contains_any(prefix, _CASH_IN_WORDS):
+        return "cash_in", "other_cash_in"
+    return None
+
+
+def parse_cash_ledger_intents(text: str) -> list[CashLedgerIntent]:
+    """Return one or more structured transaction intents from a message.
+
+    Operators often dictate a whole cash movement in one voice note, e.g.
+    "j’ai retiré 1000 ... j’ai payé 500 de gasoil, 110 de nourriture".
+    The original single-intent parser intentionally remains available for
+    simple messages; this function adds deterministic splitting for compound
+    messages while preserving the old behavior for one-amount messages.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    matches = list(_AMOUNT_RE.finditer(raw))
+    if len(matches) <= 1:
+        intent = parse_cash_ledger_intent(raw)
+        return [intent] if intent is not None else []
+
+    lowered = raw.casefold()
+    intents: list[CashLedgerIntent] = []
+    active_direction = ""
+    active_type = ""
+    previous_end = 0
+    for index, match in enumerate(matches):
+        whole = re.sub(r"[\s,._]", "", match.group(1))
+        cents = (match.group(2) or "").ljust(2, "0")[:2]
+        amount_minor = int(whole) * 100 + (int(cents) if cents else 0)
+
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        prefix = lowered[previous_end : match.start()]
+        suffix = lowered[match.end() : next_start]
+        nearby = f"{prefix} {suffix}"
+        inferred = _transaction_type_for_context(
+            prefix=prefix,
+            nearby=nearby,
+            active_direction=active_direction,
+        )
+        if inferred is None:
+            previous_end = match.end()
+            continue
+        direction, transaction_type = inferred
+        if _contains_any(prefix, _CASH_OUT_WORDS):
+            active_direction = "cash_out"
+            active_type = "cash_payment"
+        elif _contains_any(prefix, _CASH_IN_WORDS):
+            active_direction = direction
+            active_type = transaction_type
+
+        if direction == active_direction and active_type:
+            transaction_type = active_type
+        category = _infer_category(suffix, direction, transaction_type)
+        if category in {"uncategorized", "other_cash_in"}:
+            category = _infer_category(nearby, direction, transaction_type)
+        if transaction_type in {"bank_withdrawal", "bank_deposit"}:
+            counterparty = "bank"
+        elif category == "uncategorized":
+            counterparty = _extract_counterparty(nearby)
+        else:
+            counterparty = ""
+        confidence = 0.9 if category != "uncategorized" or transaction_type.startswith("bank_") else 0.72
+        review_reason = "category_unclear" if category == "uncategorized" else ""
+        intents.append(
+            CashLedgerIntent(
+                direction=direction,
+                amount_minor=amount_minor,
+                transaction_type=transaction_type,
+                category=category,
+                counterparty=counterparty,
+                description=raw,
+                confidence=confidence,
+                review_reason=review_reason,
+            )
+        )
+        previous_end = match.end()
+    return intents
 
 
 def _entry_snapshot(entry: CashLedgerEntryRow) -> dict[str, Any]:

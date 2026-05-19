@@ -7,6 +7,7 @@ from app.cash_ledger import (
     create_cash_ledger_entry,
     expected_cash_balance_minor,
     parse_cash_ledger_intent,
+    parse_cash_ledger_intents,
 )
 from app.db import init_db, make_engine, session_scope
 from app.models import CashLedgerAuditEventRow, CashLedgerEntryRow
@@ -36,6 +37,30 @@ def test_parse_cash_ledger_intent_detects_cash_out_payment_category_and_counterp
 
 def test_parse_cash_ledger_intent_ignores_non_transaction_text():
     assert parse_cash_ledger_intent("what time is my next meeting?") is None
+
+
+def test_parse_cash_ledger_intents_splits_french_withdrawal_and_expenses():
+    intents = parse_cash_ledger_intents(
+        "Bonjour, j’ai retiré 1000 dirhams du compte bancaire de la société "
+        "j’ai payé avec 500 dirhams de gasoil, 110 dh de nourriture, 50 dirhams pourboire"
+    )
+
+    assert [(intent.direction, intent.amount_minor, intent.category) for intent in intents] == [
+        ("cash_in", 100_000, "bank"),
+        ("cash_out", 50_000, "fuel"),
+        ("cash_out", 11_000, "meals"),
+        ("cash_out", 5_000, "tips"),
+    ]
+
+
+def test_parse_cash_ledger_intents_preserves_single_intent_behavior():
+    intents = parse_cash_ledger_intents("I paid Hamza 300 MAD for fuel")
+
+    assert len(intents) == 1
+    assert intents[0].direction == "cash_out"
+    assert intents[0].amount_minor == 30_000
+    assert intents[0].category == "fuel"
+    assert intents[0].counterparty == "Hamza"
 
 
 def test_create_cash_ledger_entry_records_audit_and_updates_expected_balance():
