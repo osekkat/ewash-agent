@@ -661,25 +661,6 @@ button.chip:active { transform: scale(0.95); }
   pointer-events: none;
   mix-blend-mode: screen;
 }
-.hero .water-glyph {
-  position: absolute;
-  right: -20px;
-  bottom: -10px;
-  /* Bumped from 0.15 → 0.35 when the decorative outlined droplet was
-   * replaced with the actual brand mark — a 0.15 watermark made the
-   * logo unreadable. Still translucent so the headline + CTA stay the
-   * visual focus. */
-  opacity: 0.35;
-  width: 200px;
-  height: 200px;
-  object-fit: contain;
-  pointer-events: none;
-  animation: drift 14s ease-in-out infinite;
-}
-@keyframes drift {
-  0%, 100% { transform: translate(0, 0) rotate(0deg); }
-  50% { transform: translate(-6px, -8px) rotate(-3deg); }
-}
 [data-variant="premium"] .hero {
   background: var(--hero-grad);
   border: 1px solid rgba(212,183,117,0.25);
