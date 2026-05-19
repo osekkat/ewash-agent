@@ -88,14 +88,6 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
       <div className="px-16 col gap-20 anim-stagger" style={{ paddingBottom: 24 }}>
         {/* HERO */}
         <div className="hero">
-          <div className="row gap-8" style={{ position: 'relative', zIndex: 1, marginBottom: 12 }}>
-            <span className="chip" style={{
-              background: 'rgba(255,255,255,0.14)',
-              color: '#fff', border: '1px solid rgba(255,255,255,0.18)',
-            }}>
-              <Icons.Leaf size={13}/> Sans eau · 100%
-            </span>
-          </div>
           <div style={{
             fontFamily: 'var(--font-display)', fontWeight: 800,
             fontSize: 28, lineHeight: 1.05, color: '#fff',
