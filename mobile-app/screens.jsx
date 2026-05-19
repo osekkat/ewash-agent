@@ -51,8 +51,7 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
     <div className="app-scroll">
       <div className="appbar">
         <div className="row gap-10">
-          <img src="assets/ewash-logo.png" width={32} height={32} alt="ewash"
-            style={{ display: 'block', flexShrink: 0 }}/>
+          <Icons.Logo size={30} style={{ color: 'var(--primary)' }} />
           {profile.name ? (
             <div className="col" style={{ gap: 2 }}>
               <div className="t-tiny" style={{ color: 'var(--text-2)', fontWeight: 600 }}>
@@ -131,11 +130,16 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
             {t.bookCta}
             <Icons.ChevronRight size={18} stroke={2.5} />
           </button>
-          {/* drop decoration */}
-          <svg className="water-glyph" viewBox="0 0 100 105">
-            <path d="M50 4 C68 24, 88 44, 88 64 a38 38 0 0 1-76 0 C12 44, 32 24, 50 4z"
-              fill="none" stroke="#fff" strokeWidth="2"/>
-          </svg>
+          {/* Brand mark — large, partially transparent so it reads as a
+              backdrop element rather than competing with the headline. The
+              .water-glyph class supplies the bottom-right pinning + drift
+              animation already used by the SVG it replaces. */}
+          <img
+            className="water-glyph"
+            src="assets/ewash_1024x1024_transparent.png"
+            alt=""
+            aria-hidden="true"
+          />
         </div>
 
         {/* QUICK STATS */}
