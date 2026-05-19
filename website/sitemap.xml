@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Ewash sitemap. Single-page marketing site for now — section anchors
+  (#avantages, #services, etc.) are crawled as part of the root URL,
+  not listed separately (per sitemaps.org guidance — fragment URLs
+  aren't standard sitemap entries).
+
+  When ewash.ma is wired to this Vercel project, find/replace the
+  canonical hostname here and in robots.txt.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://website-theta-amber-45.vercel.app/</loc>
+    <lastmod>2026-05-19</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>

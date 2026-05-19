@@ -1,0 +1,14 @@
+# Ewash — robots.txt
+# Allow all crawlers. Update the sitemap URL when ewash.ma is pointed at
+# this Vercel project (search engines will follow the new canonical via
+# the <link rel="canonical"> tag in index.html).
+
+User-agent: *
+Allow: /
+
+# Block obviously useless crawl paths if any get added later, e.g.:
+# Disallow: /admin
+# Disallow: /api
+
+# Sitemap discovery — absolute URL is required per spec.
+Sitemap: https://website-theta-amber-45.vercel.app/sitemap.xml
