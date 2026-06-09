@@ -477,6 +477,41 @@ class WhatsappMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class OperationalServiceRecordRow(Base):
+    __tablename__ = "operational_service_records"
+    __table_args__ = (
+        CheckConstraint("unit_price_ht >= 0", name="ck_operational_service_records_unit_price_ht_nonnegative"),
+        CheckConstraint(
+            "status IN ('complete','missing_matricule','missing_photo','needs_review','voided')",
+            name="ck_operational_service_records_status",
+        ),
+        Index("ix_operational_service_client_site_date", "client_name", "site_name", "service_date"),
+        Index("ix_operational_service_source_message", "source_channel", "source_message_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    service_date: Mapped[date] = mapped_column(Date, index=True)
+    client_name: Mapped[str] = mapped_column(String(120), default="", index=True)
+    site_name: Mapped[str] = mapped_column(String(120), default="", index=True)
+    source_channel: Mapped[str] = mapped_column(String(40), default="whatsapp", index=True)
+    source_chat_id: Mapped[str] = mapped_column(String(160), default="", index=True)
+    source_message_id: Mapped[str] = mapped_column(String(160), default="", index=True)
+    source_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    sender_id: Mapped[str] = mapped_column(String(160), default="", index=True)
+    vehicle_model: Mapped[str] = mapped_column(String(160), default="")
+    matricule: Mapped[str] = mapped_column(String(120), default="", index=True)
+    category: Mapped[str] = mapped_column(String(40), default="", index=True)
+    prestation: Mapped[str] = mapped_column(String(120), default="lavage", index=True)
+    unit_price_ht: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(8), default="MAD")
+    photo_reference: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(40), default="complete", index=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class CashLedgerEntryRow(Base):
     __tablename__ = "cash_ledger_entries"
     __table_args__ = (

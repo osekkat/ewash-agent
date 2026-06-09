@@ -26,6 +26,7 @@ from app.models import (
     CustomerTokenRow,
     CustomerVehicle,
     DataErasureAuditRow,
+    OperationalServiceRecordRow,
     PromoCodeRow,
     PromoDiscountRow,
     ReminderRuleRow,
@@ -81,6 +82,7 @@ def test_init_db_creates_v03_core_tables():
         "centers",
         "admin_texts",
         "booking_notification_settings",
+        "operational_service_records",
         "cash_ledger_entries",
         "cash_ledger_audit_events",
         "cash_reconciliations",
@@ -129,6 +131,20 @@ def test_init_db_creates_v03_core_tables():
     assert {"settings_key", "enabled", "phone_number", "template_name", "template_language"}.issubset(
         notification_columns
     )
+    tracking_columns = {column["name"] for column in inspect(engine).get_columns("operational_service_records")}
+    assert {
+        "service_date",
+        "client_name",
+        "site_name",
+        "source_chat_id",
+        "source_message_id",
+        "vehicle_model",
+        "matricule",
+        "prestation",
+        "unit_price_ht",
+        "photo_reference",
+        "status",
+    }.issubset(tracking_columns)
     cash_columns = {column["name"] for column in inspect(engine).get_columns("cash_ledger_entries")}
     assert {
         "owner_phone",

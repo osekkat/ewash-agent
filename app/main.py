@@ -20,7 +20,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import admin, api as api_module, handlers, meta, reminders
 from .config import settings
-from .persistence import mark_abandoned_conversations
+from .db import session_scope
+from .operational_tracking import create_operational_service_record, operational_record_input_from_payload
+from .persistence import _configured_engine, mark_abandoned_conversations
 from .rate_limit import (
     PerPhoneRateLimitExceeded,
     limiter,
@@ -143,6 +145,37 @@ async def abandon_stale_conversations(
         raise HTTPException(status_code=403, detail="Forbidden")
     count = mark_abandoned_conversations()
     return {"abandoned": count}
+
+
+@app.post("/internal/operational-tracking/records")
+async def ingest_operational_tracking_records(
+    request: Request,
+    x_internal_cron_secret: str | None = Header(default=None, alias="X-Internal-Cron-Secret"),
+):
+    """Protected ingestion hook for WhatsApp/Hermes operational service records."""
+    if not settings.internal_cron_secret:
+        raise HTTPException(status_code=503, detail="Internal cron is not configured")
+    if not secrets.compare_digest(x_internal_cron_secret or "", settings.internal_cron_secret):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    engine = _configured_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+
+    try:
+        payload = await request.json()
+        raw_records = payload.get("records") if isinstance(payload, dict) else None
+        if not isinstance(raw_records, list):
+            raise ValueError("records must be a list")
+        inputs = [operational_record_input_from_payload(item) for item in raw_records]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    record_ids: list[int] = []
+    with session_scope(engine) as session:
+        for data in inputs:
+            row = create_operational_service_record(session, data)
+            record_ids.append(row.id)
+    return {"created": len(record_ids), "record_ids": record_ids}
 
 
 @app.get("/webhook", response_class=PlainTextResponse)

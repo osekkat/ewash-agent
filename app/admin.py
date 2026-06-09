@@ -29,7 +29,8 @@ from .cash_ledger import (
 )
 from .config import settings
 from .db import session_scope
-from .models import CashLedgerEntryRow
+from .models import CashLedgerEntryRow, OperationalServiceRecordRow
+from .operational_tracking import TRACKING_REVIEW_STATUSES, operational_summary_for_day, recent_operational_service_records
 from .notifications import get_booking_notification_settings, normalize_phone, upsert_booking_notification_settings
 from .persistence import (
     BookingLockBusy,
@@ -50,6 +51,7 @@ _NAV_ITEMS = (
     ("dashboard", "nav.dashboard", "/admin"),
     ("bookings", "nav.bookings", "/admin/bookings"),
     ("customers", "nav.customers", "/admin/customers"),
+    ("tracking", "nav.tracking", "/admin/tracking"),
     ("cash", "Cash", "/admin/cash"),
     ("erasures", "nav.erasures", "/admin/erasures"),
     ("prices", "nav.prices", "/admin/prices"),
@@ -740,6 +742,88 @@ def _copy_page(*, locale: str, message: str = "", error: str = "") -> HTMLRespon
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/copy"), status_code=200)
 
 
+def _dh_major(amount: int) -> str:
+    return f"{int(amount or 0):,} MAD".replace(",", " ")
+
+
+def _tracking_page(*, locale: str) -> HTMLResponse:
+    title = t("nav.tracking", locale)
+    engine = _configured_engine()
+    if engine is None:
+        body = f"""
+        <div class="hero"><div><div class="eyebrow">Operational tracking</div><h1>{escape(title)}</h1></div></div>
+        <section class="empty-panel">
+          <h2>Not configured</h2>
+          <p>Set DATABASE_URL to enable persistent operational service tracking.</p>
+        </section>
+        """
+        return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/tracking"))
+
+    today = date.today()
+    with session_scope(engine) as session:
+        summary = operational_summary_for_day(session, business_date=today)
+        recent_records = recent_operational_service_records(session, limit=100)
+        today_records = session.scalars(
+            select(OperationalServiceRecordRow)
+            .where(OperationalServiceRecordRow.service_date == today, OperationalServiceRecordRow.status != "voided")
+            .order_by(
+                OperationalServiceRecordRow.client_name.asc(),
+                OperationalServiceRecordRow.site_name.asc(),
+                OperationalServiceRecordRow.source_order.asc(),
+                OperationalServiceRecordRow.id.asc(),
+            )
+        ).all()
+
+    site_totals: dict[tuple[str, str], dict[str, int]] = {}
+    for row in today_records:
+        key = (row.client_name, row.site_name)
+        bucket = site_totals.setdefault(key, {"count": 0, "total": 0, "review": 0})
+        bucket["count"] += 1
+        bucket["total"] += int(row.unit_price_ht or 0)
+        if row.status in TRACKING_REVIEW_STATUSES:
+            bucket["review"] += 1
+    site_cards = "".join(
+        "<div class='metric-card'>"
+        f"<div class='metric-label'>{escape(client)} {escape(site)}</div>"
+        f"<div class='metric-value'>{values['count']}</div>"
+        f"<div class='metric-note'>{escape(_dh_major(values['total']))} HT · {values['review']} à vérifier</div>"
+        "</div>"
+        for (client, site), values in sorted(site_totals.items())
+    ) or "<div class='metric-card'><div class='metric-label'>Aucun site aujourd’hui</div><div class='metric-value'>0</div></div>"
+
+    rows = "".join(
+        "<div class='table-row' style='grid-template-columns:.7fr 1.25fr 1.2fr 1fr .9fr .7fr .9fr;'>"
+        f"<span>{escape(row.service_date.isoformat() if row.service_date else '')}</span>"
+        f"<span>{escape(row.client_name)}<br><small>{escape(row.site_name)}</small></span>"
+        f"<span>{escape(row.vehicle_model or '—')}</span>"
+        f"<span>{escape(row.matricule or '—')}</span>"
+        f"<span>{escape(row.prestation or '—')}</span>"
+        f"<span>{escape(_dh_major(row.unit_price_ht))}</span>"
+        f"<span>{escape(row.status)}</span>"
+        "</div>"
+        for row in recent_records
+    ) or "<div class='table-row'><span>No operational records yet.</span><span></span><span></span></div>"
+
+    body = f"""
+    <div class="hero"><div><div class="eyebrow">WhatsApp operations</div><h1>{escape(title)}</h1><p>Source de vérité pour les prestations suivies depuis WhatsApp : client, site, véhicule, matricule, photo et tarif HT.</p></div></div>
+    <section class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Véhicules aujourd’hui</div><div class="metric-value">{summary.record_count}</div></div>
+      <div class="metric-card"><div class="metric-label">Total HT aujourd’hui</div><div class="metric-value">{escape(_dh_major(summary.total_ht_dh))}</div></div>
+      <div class="metric-card"><div class="metric-label">À vérifier</div><div class="metric-value">{summary.needs_review_count}</div></div>
+      <div class="metric-card"><div class="metric-label">Dernières lignes</div><div class="metric-value">{len(recent_records)}</div></div>
+    </section>
+    <section class="metric-grid">{site_cards}</section>
+    <section class="card" style="padding:18px;">
+      <h2>Dernières prestations suivies</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:.7fr 1.25fr 1.2fr 1fr .9fr .7fr .9fr;"><span>Date</span><span>Client / site</span><span>Véhicule</span><span>Matricule</span><span>Prestation</span><span>HT</span><span>Statut</span></div>
+        {rows}
+      </div>
+    </section>
+    """
+    return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/tracking"))
+
+
 def _cash_category_select(row: CashLedgerEntryRow, *, locale: str) -> str:
     options = "".join(
         f'<option value="{escape(category)}"{selected}>'
@@ -1398,6 +1482,8 @@ async def admin_section(request: Request, page_slug: str, lang: str | None = Que
         if erased is not None:
             message = t("admin.customers.erased", locale).format(count=erased)
         return _customers_page(locale=locale, message=message, error=error)
+    if page_id == "tracking":
+        return _tracking_page(locale=locale)
     if page_id == "cash":
         return _cash_page(locale=locale)
     if page_id == "erasures":
