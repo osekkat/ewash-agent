@@ -30,6 +30,7 @@ def test_admin_navigation_is_localized():
         "Tableau de bord",
         "Réservations",
         "Clients",
+        "Paie agents",
         "Suivi opérationnel",
         "Effacements",
         "Prix",
@@ -41,4 +42,11 @@ def test_admin_navigation_is_localized():
         "Centres",
         "Textes",
     ]
-    assert admin_nav_labels("en")[:5] == ["Dashboard", "Bookings", "Customers", "Operational tracking", "Erasures"]
+    assert admin_nav_labels("en")[:6] == [
+        "Dashboard",
+        "Bookings",
+        "Customers",
+        "Agent payroll",
+        "Operational tracking",
+        "Erasures",
+    ]

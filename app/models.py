@@ -477,6 +477,36 @@ class WhatsappMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AgentPayrollEventRow(Base):
+    __tablename__ = "agent_payroll_events"
+    __table_args__ = (
+        UniqueConstraint("source_file", "source_row_number", name="uq_agent_payroll_source_row"),
+        CheckConstraint("impacted_hours IS NULL OR impacted_hours >= 0", name="ck_agent_payroll_impacted_hours_nonnegative"),
+        Index("ix_agent_payroll_event_date_agent", "event_date", "agent_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_date: Mapped[date] = mapped_column(Date, index=True)
+    agent_name: Mapped[str] = mapped_column(String(120), default="", index=True)
+    event_type: Mapped[str] = mapped_column(String(120), default="", index=True)
+    warned: Mapped[str] = mapped_column(String(16), default="")
+    scheduled_start_time: Mapped[str] = mapped_column(String(16), default="")
+    scheduled_end_time: Mapped[str] = mapped_column(String(16), default="")
+    actual_start_time: Mapped[str] = mapped_column(String(16), default="")
+    actual_end_time: Mapped[str] = mapped_column(String(16), default="")
+    impacted_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    justification: Mapped[str] = mapped_column(Text, default="")
+    comment: Mapped[str] = mapped_column(Text, default="")
+    validated_by: Mapped[str] = mapped_column(String(120), default="")
+    payroll_impact_dh: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="À vérifier", index=True)
+    source_file: Mapped[str] = mapped_column(String(240), default="", index=True)
+    source_row_number: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class OperationalServiceRecordRow(Base):
     __tablename__ = "operational_service_records"
     __table_args__ = (

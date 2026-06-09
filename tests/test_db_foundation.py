@@ -9,6 +9,7 @@ from sqlalchemy import inspect, select, text
 from app.db import init_db, make_engine, normalize_database_url, session_scope
 from app.models import (
     AdminTextRow,
+    AgentPayrollEventRow,
     BookingReminderRow,
     BookingLineItemRow,
     BookingRefCounterRow,
@@ -82,6 +83,7 @@ def test_init_db_creates_v03_core_tables():
         "centers",
         "admin_texts",
         "booking_notification_settings",
+        "agent_payroll_events",
         "operational_service_records",
         "cash_ledger_entries",
         "cash_ledger_audit_events",
@@ -131,6 +133,21 @@ def test_init_db_creates_v03_core_tables():
     assert {"settings_key", "enabled", "phone_number", "template_name", "template_language"}.issubset(
         notification_columns
     )
+    payroll_columns = {column["name"] for column in inspect(engine).get_columns("agent_payroll_events")}
+    assert {
+        "event_date",
+        "agent_name",
+        "event_type",
+        "warned",
+        "scheduled_start_time",
+        "impacted_hours",
+        "justification",
+        "comment",
+        "payroll_impact_dh",
+        "status",
+        "source_file",
+        "source_row_number",
+    }.issubset(payroll_columns)
     tracking_columns = {column["name"] for column in inspect(engine).get_columns("operational_service_records")}
     assert {
         "service_date",

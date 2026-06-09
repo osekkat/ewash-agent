@@ -29,7 +29,8 @@ from .cash_ledger import (
 )
 from .config import settings
 from .db import session_scope
-from .models import CashLedgerEntryRow, OperationalServiceRecordRow
+from .agent_payroll import AGENT_PAYROLL_MANUAL_KEY
+from .models import AdminTextRow, AgentPayrollEventRow, CashLedgerEntryRow, OperationalServiceRecordRow
 from .operational_tracking import TRACKING_REVIEW_STATUSES, operational_summary_for_day, recent_operational_service_records
 from .notifications import get_booking_notification_settings, normalize_phone, upsert_booking_notification_settings
 from .persistence import (
@@ -51,6 +52,7 @@ _NAV_ITEMS = (
     ("dashboard", "nav.dashboard", "/admin"),
     ("bookings", "nav.bookings", "/admin/bookings"),
     ("customers", "nav.customers", "/admin/customers"),
+    ("payroll", "nav.payroll", "/admin/payroll"),
     ("tracking", "nav.tracking", "/admin/tracking"),
     ("cash", "Cash", "/admin/cash"),
     ("erasures", "nav.erasures", "/admin/erasures"),
@@ -740,6 +742,65 @@ def _copy_page(*, locale: str, message: str = "", error: str = "") -> HTMLRespon
 <section class="dashboard-grid"><article class="empty-panel"><h2>{escape(title)}</h2>{_notice_html(message=message, error=error)}<div class="table-shell"><div class="table-row table-head"><span>{escape(t('admin.copy.key', locale))}</span><span>{escape(t('admin.copy.body', locale))}</span><span></span></div>{rows}</div></article>
 <aside class="empty-panel"><h2>{escape(t('admin.copy.add_or_update', locale))}</h2><form class="admin-form" method="post" action="/admin/copy?lang={escape(locale)}"><label>{escape(t('admin.copy.key', locale))}<input name="text_key" placeholder="booking.welcome" required></label><label>{escape(t('admin.copy.title', locale))}<input name="title" placeholder="Accueil réservation" required></label><label>{escape(t('admin.copy.body', locale))}<textarea name="body" required></textarea></label><p><button type="submit">{escape(t('action.save', locale))}</button></p></form></aside></section>"""
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/copy"), status_code=200)
+
+
+def _payroll_page(*, locale: str) -> HTMLResponse:
+    title = t("nav.payroll", locale)
+    engine = _configured_engine()
+    if engine is None:
+        body = f"""
+        <div class="hero"><div><div class="eyebrow">Payroll</div><h1>{escape(title)}</h1></div></div>
+        <section class="empty-panel"><h2>Not configured</h2><p>Set DATABASE_URL to enable agent payroll tracking.</p></section>
+        """
+        return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/payroll"))
+
+    with session_scope(engine) as session:
+        rows = session.scalars(
+            select(AgentPayrollEventRow)
+            .order_by(AgentPayrollEventRow.event_date.desc(), AgentPayrollEventRow.id.asc())
+            .limit(200)
+        ).all()
+        manual = session.get(AdminTextRow, AGENT_PAYROLL_MANUAL_KEY)
+
+    total_hours = sum(float(row.impacted_hours or 0) for row in rows)
+    total_impact = sum(int(row.payroll_impact_dh or 0) for row in rows)
+    pending_count = sum(1 for row in rows if row.status == "À vérifier")
+    table_rows = "".join(
+        "<div class='table-row' style='grid-template-columns:.75fr 1fr 1.2fr .65fr .65fr .8fr 1.6fr .8fr;'>"
+        f"<span>{escape(row.event_date.isoformat() if row.event_date else '')}</span>"
+        f"<span>{escape(row.agent_name)}</span>"
+        f"<span>{escape(row.event_type)}</span>"
+        f"<span>{escape(row.warned or '—')}</span>"
+        f"<span>{escape(str(row.impacted_hours) if row.impacted_hours is not None else '—')}</span>"
+        f"<span>{escape(str(row.payroll_impact_dh) + ' MAD' if row.payroll_impact_dh is not None else '—')}</span>"
+        f"<span>{escape(row.comment or '—')}</span>"
+        f"<span>{escape(row.status)}</span>"
+        "</div>"
+        for row in rows
+    ) or "<div class='table-row'><span>Aucun événement agent importé.</span><span></span><span></span></div>"
+    manual_body = escape(manual.body if manual else "Aucun mode d’emploi importé.").replace("\n", "<br>")
+
+    body = f"""
+    <div class="hero"><div><div class="eyebrow">Agents</div><h1>{escape(title)}</h1><p>Suivi des absences, retards, incidents et impacts paie importés depuis les anciens fichiers.</p></div></div>
+    <section class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Événements importés</div><div class="metric-value">{len(rows)}</div></div>
+      <div class="metric-card"><div class="metric-label">À vérifier</div><div class="metric-value">{pending_count}</div></div>
+      <div class="metric-card"><div class="metric-label">Heures impactées</div><div class="metric-value">{total_hours:g}</div></div>
+      <div class="metric-card"><div class="metric-label">Impact paie saisi</div><div class="metric-value">{total_impact} MAD</div></div>
+    </section>
+    <section class="card" style="padding:18px; margin-bottom:18px;">
+      <h2>{escape(manual.title if manual else 'Mode d’emploi')}</h2>
+      <p>{manual_body}</p>
+    </section>
+    <section class="card" style="padding:18px;">
+      <h2>Événements agents</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:.75fr 1fr 1.2fr .65fr .65fr .8fr 1.6fr .8fr;"><span>Date</span><span>Agent</span><span>Type</span><span>Prévenu</span><span>Heures</span><span>Impact</span><span>Commentaire</span><span>Statut</span></div>
+        {table_rows}
+      </div>
+    </section>
+    """
+    return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/payroll"))
 
 
 def _dh_major(amount: int) -> str:
@@ -1482,6 +1543,8 @@ async def admin_section(request: Request, page_slug: str, lang: str | None = Que
         if erased is not None:
             message = t("admin.customers.erased", locale).format(count=erased)
         return _customers_page(locale=locale, message=message, error=error)
+    if page_id == "payroll":
+        return _payroll_page(locale=locale)
     if page_id == "tracking":
         return _tracking_page(locale=locale)
     if page_id == "cash":
