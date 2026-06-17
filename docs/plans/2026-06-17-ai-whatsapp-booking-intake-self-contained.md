@@ -342,7 +342,7 @@ Rules:
 - Tests generally use SQLite in-memory, so Postgres-specific constraints need careful handling.
 - If using partial indexes/check constraints, follow existing dialect-conditional patterns.
 
-For AI intake, a new audit table such as `ai_intake_events` is appropriate if live/shadow model behavior should be reviewed later.
+For AI intake, a new audit table such as `ai_intake_events` is appropriate so live test-number and eWash-number behavior can be reviewed later.
 
 ### 5.5 Admin portal
 
@@ -350,8 +350,8 @@ The admin portal is server-rendered inline HTML in `app/admin.py`, not a separat
 
 The admin portal should eventually show:
 
-- AI intake enabled/disabled;
-- shadow/live mode;
+- AI intake live/test-number/eWash-number deployment status;
+- current intake mode and deployment stage;
 - recent AI classifications;
 - error/fallback rates;
 - whether a booking was AI-assisted;
@@ -429,7 +429,7 @@ The correct design is a deterministic core with an AI intake layer.
 
 ## 7. Proposed feature in one sentence
 
-Add a disabled-by-default, shadow-mode-first AI intake layer to the existing WhatsApp bot that understands natural customer messages, extracts candidate booking fields, asks concise missing-field questions, and hands complete drafts to the existing deterministic booking validation and pending-confirmation persistence path.
+Add a live AI intake layer to the existing WhatsApp bot, validate it first on a dedicated WhatsApp test number, then deploy the same live behavior directly to the official eWash WhatsApp Business number. The intake layer understands natural customer messages, extracts candidate booking fields, asks concise missing-field questions, and hands complete drafts to the existing deterministic booking validation and pending-confirmation persistence path.
 
 ---
 
@@ -662,35 +662,35 @@ If mapping logic grows, put deterministic mapping here:
 
 ### 10.2 Config to add
 
-Disabled-by-default settings:
+Live test-number-first settings:
 
 ```python
-ai_intake_enabled: bool = False
-ai_intake_shadow_mode: bool = True
+ai_intake_enabled: bool = True
+ai_intake_mode: str = "live"
 ai_intake_provider: str = "openai_compatible"
 ai_intake_base_url: str = ""
 ai_intake_api_key: str = ""
 ai_intake_model: str = ""
 ai_intake_timeout_seconds: float = 8.0
 ai_intake_max_retries: int = 1
-ai_intake_allowed_phones: str = ""
+ai_intake_deployment_stage: str = "test_number"
 ```
 
 Suggested env names:
 
 ```env
-EWASH_AI_INTAKE_ENABLED=false
-EWASH_AI_INTAKE_SHADOW_MODE=true
+EWASH_AI_INTAKE_ENABLED=true
+EWASH_AI_INTAKE_MODE=live
 EWASH_AI_INTAKE_PROVIDER=openai_compatible
 EWASH_AI_INTAKE_BASE_URL=
 EWASH_AI_INTAKE_API_KEY=
 EWASH_AI_INTAKE_MODEL=
 EWASH_AI_INTAKE_TIMEOUT_SECONDS=8
 EWASH_AI_INTAKE_MAX_RETRIES=1
-EWASH_AI_INTAKE_ALLOWED_PHONES=
+EWASH_AI_INTAKE_DEPLOYMENT_STAGE=test_number
 ```
 
-`EWASH_AI_INTAKE_ALLOWED_PHONES` is optional but strongly recommended for rollout.
+For the first deployment, `EWASH_AI_INTAKE_DEPLOYMENT_STAGE` should be `test_number`. After live validation, switch the connected WhatsApp Business configuration to the official eWash number and set the stage to `ewash_number` for logs/admin visibility.
 
 ### 10.3 Audit table to add
 
@@ -711,7 +711,8 @@ missing_fields_json
 action_taken
 error_code
 latency_ms
-shadow_mode
+intake_mode
+deployment_stage
 model_label (non-secret, optional)
 ```
 
@@ -785,40 +786,36 @@ Entry conditions:
 - text exists;
 - no interactive payload is being processed;
 - state is `IDLE` or explicit AI intake state;
-- sender is allowed if rollout allowlist is set;
 - not an owner cash-ledger/operations route;
 - message length within configured cap.
 
-### 10.6 Shadow mode
+### 10.6 Live test-number mode
 
-Shadow mode is essential.
+The first validation environment is a live WhatsApp test number. AI intake should reply to that test-number conversation from the start so Omar/Oussama can evaluate the actual customer experience, not only hidden classifications.
 
-When `ai_intake_shadow_mode=true`:
-
-- call classifier/extractor;
-- log `ai_intake_events`;
-- do not alter customer-visible response;
-- continue current deterministic bot behavior.
-
-This gives real-world data to evaluate:
-
-- classification accuracy;
-- missing-field logic;
-- language coverage;
-- provider latency;
-- failure rate;
-- false positive booking detection.
-
-### 10.7 Live mode
-
-When shadow mode is off:
+When `ai_intake_enabled=true`, `ai_intake_mode="live"`, and `ai_intake_deployment_stage="test_number"`:
 
 - high-confidence booking intent starts or updates an AI booking draft;
 - missing fields are asked one at a time;
 - complete draft triggers deterministic recap;
 - customer must explicitly confirm sending the request;
 - only then persistence happens;
-- persistence writes `pending_ewash_confirmation` only.
+- persistence writes `pending_ewash_confirmation` only;
+- every attempt is logged to `ai_intake_events`.
+
+This test-number run gives real-world data to evaluate:
+
+- classification accuracy;
+- missing-field logic;
+- language coverage;
+- provider latency;
+- failure rate;
+- false positive booking detection;
+- the actual customer-visible tone and flow.
+
+### 10.7 Production eWash number mode
+
+After the test-number behavior is accepted, deploy the same live flow directly to the official eWash WhatsApp Business number. Do not insert a shadow-mode or small-allowlist phase unless Omar explicitly changes this rollout decision. Keep the safety rails unchanged: deterministic validation, fixed reply templates, no direct `confirmed` writes, and technical-leakage bans.
 
 ---
 
@@ -1003,7 +1000,7 @@ It should not be the main production client booking line unless there is a delib
 
 ### Task 1: Add AI intake configuration
 
-**Objective:** Add disabled-by-default settings and env documentation.
+**Objective:** Add live-mode settings and env documentation for a test-number-first rollout.
 
 **Files:**
 
@@ -1013,9 +1010,9 @@ It should not be the main production client booking line unless there is a delib
 
 **Requirements:**
 
-- default disabled;
-- shadow mode default true;
-- no provider call possible without explicit enablement;
+- live mode enabled for the configured WhatsApp test-number deployment;
+- deployment stage can be labelled `test_number` or `ewash_number` for logs/admin visibility;
+- missing/invalid provider configuration fails closed with a customer-safe fallback;
 - provider secret never printed.
 
 **Test:**
@@ -1171,9 +1168,9 @@ source .venv/bin/activate && python -m pytest -q tests/test_config_defaults.py
 
 ---
 
-### Task 8: Add shadow-mode handler integration
+### Task 8: Add live test-number handler integration
 
-**Objective:** Observe AI behavior safely before changing customer replies.
+**Objective:** Enable customer-visible AI intake on the WhatsApp test number while preserving all deterministic booking safeguards.
 
 **Files:**
 
@@ -1181,15 +1178,15 @@ source .venv/bin/activate && python -m pytest -q tests/test_config_defaults.py
 - `app/models.py`
 - `app/persistence.py`
 - new Alembic migration for `ai_intake_events`
-- `tests/test_ai_intake_shadow_mode.py`
+- `tests/test_ai_intake_live_test_number.py`
 
 **Tests:**
 
 - classifier called for natural booking text in IDLE;
 - not called for menu/reset/start;
 - not called after cash-ledger capture;
-- not called when disabled;
-- customer-visible behavior unchanged in shadow mode;
+- provider failure falls back to the existing menu or generic safe message;
+- customer-visible AI replies are rendered only from fixed templates;
 - event row logged.
 
 ---
@@ -1264,8 +1261,8 @@ Persistence must occur only after explicit confirmation.
 
 **Admin UI v1:**
 
-- enabled/disabled indicator;
-- shadow/live mode;
+- live/test-number/eWash-number deployment indicator;
+- current intake mode and deployment stage;
 - recent intake events;
 - classification counts;
 - parse/provider errors;
@@ -1318,7 +1315,7 @@ Expected behavior:
 - returning customer flow;
 - button/list booking path;
 - cash ledger owner route;
-- AI disabled behavior;
+- provider-failure fallback behavior;
 - staff/admin confirmation invariant.
 
 ---
@@ -1334,13 +1331,12 @@ Expected behavior:
 
 **Stages:**
 
-1. Deploy disabled.
-2. Enable shadow mode for allowlisted internal numbers.
-3. Review at least 50 real messages/events.
-4. Fix prompt/mapping/templates based on findings.
-5. Enable live mode for internal/test numbers.
-6. Enable live mode for a small customer cohort.
-7. Expand after metrics are acceptable.
+1. Configure the WhatsApp test number with `EWASH_AI_INTAKE_ENABLED=true`, `EWASH_AI_INTAKE_MODE=live`, and `EWASH_AI_INTAKE_DEPLOYMENT_STAGE=test_number`.
+2. Run live end-to-end booking conversations on the test number using realistic French, Darija, Arabic, and English messages.
+3. Review `ai_intake_events`, created pending bookings, staff notifications, and customer replies from the test-number run.
+4. Fix prompt/mapping/template issues found during live test-number validation.
+5. Point the same live flow at the official eWash WhatsApp Business number with `EWASH_AI_INTAKE_DEPLOYMENT_STAGE=ewash_number`.
+6. Monitor the official number closely after launch for no status violations, no technical leakage, no pricing drift, and acceptable fallback rate.
 
 ---
 
@@ -1352,7 +1348,7 @@ Run targeted tests after each implementation step:
 source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_schemas.py
 source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_provider.py
 source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_mapping.py
-source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_shadow_mode.py
+source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_live_test_number.py
 source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_live_flow.py
 source .venv/bin/activate && python -m pytest -q tests/test_ai_intake_persistence.py
 ```
@@ -1440,7 +1436,7 @@ AI intake should preserve existing rate limits and should not create an easier s
 - per-IP rate limits if available from webhook metadata/proxy;
 - max message length;
 - provider cost caps;
-- allowlist rollout;
+- separate test-number validation before the eWash number;
 - fallback to deterministic menu when abused.
 
 ---
@@ -1485,7 +1481,7 @@ Mitigation:
 
 - short timeout;
 - fallback to menu;
-- shadow metrics before live;
+- live test-number latency metrics before eWash-number launch;
 - consider async/deferred patterns only if needed and safe.
 
 ### Risk: provider outage blocks bookings
@@ -1493,16 +1489,16 @@ Mitigation:
 Mitigation:
 
 - deterministic bot remains fallback;
-- AI disabled flag;
+- provider failure fallback path;
 - provider failures do not stop menu booking.
 
-### Risk: shadow mode produces no useful data because it misses real customer variety
+### Risk: test-number validation misses real customer variety
 
 Mitigation:
 
-- run shadow mode on real internal/customer traffic;
-- review event table;
-- add examples to tests from real failures.
+- test with realistic French, Darija, Arabic, and English booking messages;
+- review event table and created pending bookings from the test number;
+- add examples to tests from live test-number failures before switching to the eWash number.
 
 ### Risk: duplicated validation logic drifts
 
@@ -1518,7 +1514,7 @@ Mitigation:
 
 1. Should the AI provider be external OpenAI-compatible API, self-hosted, or through an existing Hermes/Nouse gateway?
 2. Should AI-assisted bookings have a new `bookings.source = "whatsapp_ai"`, or should they stay `source="whatsapp"` and be linked only through `ai_intake_events`?
-3. How strict should the live rollout allowlist be?
+3. Which WhatsApp test number should be used for live validation before switching to the eWash number?
 4. Should customer replies remain French-first, or should the assistant respond in the detected language (French/Darija/Arabic/English)?
 5. Should price questions be answered by the AI intake layer or routed to deterministic catalog menu responses first?
 6. How should cancellation/rescheduling be handled in v1: out of scope, staff handoff, or deterministic flow?
@@ -1541,7 +1537,7 @@ A useful reviewer should look for flaws in:
 - WhatsApp UX: are replies concise and natural?
 - localization: is Darija/Arabic understanding handled appropriately?
 - admin operability: can Omar/eWash diagnose what happened?
-- rollout safety: is shadow mode sufficient?
+- rollout safety: is live test-number validation sufficient before direct eWash-number deployment?
 - testing: are all high-risk paths covered?
 - implementation complexity: can this be shipped incrementally?
 - maintainability: is provider code isolated from business rules?
@@ -1552,8 +1548,8 @@ A useful reviewer should look for flaws in:
 
 The implementation is acceptable only if:
 
-1. AI disabled means existing WhatsApp bot behavior is unchanged.
-2. Shadow mode logs classifications without changing customer replies.
+1. Live mode works end to end on the configured WhatsApp test number.
+2. The same live mode can be moved directly to the official eWash WhatsApp Business number.
 3. Live mode can understand a realistic natural booking request.
 4. Live mode asks missing-field questions one at a time.
 5. AI-assisted persistence creates only `pending_ewash_confirmation` bookings.
@@ -1562,7 +1558,7 @@ The implementation is acceptable only if:
 8. Provider failures fall back safely.
 9. No technical/internal/Hermes/provider messages are sent to customers.
 10. Admin can review AI intake behavior.
-11. Tests cover disabled, shadow, live, ambiguous, provider-failure, and persistence paths.
+11. Tests cover live test-number routing, live intake, ambiguity, provider-failure, existing-flow regression, and persistence paths.
 12. Full backend test suite passes.
 
 ---
@@ -1573,9 +1569,9 @@ If no further product decisions are made, use these defaults:
 
 - official Meta WhatsApp Business Platform / Cloud API for production;
 - no QR/Web bridge for the main customer booking number;
-- AI disabled by default;
-- shadow mode enabled by default;
-- internal allowlist before public live mode;
+- live mode on the WhatsApp test number first;
+- direct deployment to the official eWash number after test-number approval;
+- no shadow-mode or small-allowlist phase unless Omar explicitly changes the rollout decision;
 - French-first customer replies, with Darija/Arabic/English understanding;
 - fixed reply templates, not raw LLM prose;
 - `bookings.source="whatsapp"` in v1, with AI involvement recorded in `ai_intake_events`;
@@ -1604,7 +1600,7 @@ This gives the best of both worlds:
 - reliable database records;
 - human operational control;
 - no accidental commitments;
-- safer rollout through shadow mode first.
+- safer rollout through live validation on a separate test number before switching to the official eWash number.
 
 ---
 
