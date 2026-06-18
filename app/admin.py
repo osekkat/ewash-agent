@@ -5,17 +5,20 @@ configured, so deploying the implementation slice does not expose booking ops.
 """
 from __future__ import annotations
 
+import base64
 import hmac
+import json
 import logging
 import secrets
 import time
 from datetime import date
 from hashlib import sha256
 from html import escape
-from urllib.parse import parse_qs
+from pathlib import Path
+from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Query, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 
 from . import catalog
@@ -55,6 +58,7 @@ _NAV_ITEMS = (
     ("payroll", "nav.payroll", "/admin/payroll"),
     ("tracking", "nav.tracking", "/admin/tracking"),
     ("cash", "Cash", "/admin/cash"),
+    ("personal_finances", "nav.personal_finances", "/admin/personal-finances"),
     ("erasures", "nav.erasures", "/admin/erasures"),
     ("prices", "nav.prices", "/admin/prices"),
     ("promos", "nav.promos", "/admin/promos"),
@@ -88,6 +92,11 @@ _CASH_CATEGORY_OPTIONS = (
     "other_cash_in",
     "other_cash_out",
 )
+_PAYROLL_RECEIPT_DIR = Path(__file__).resolve().parents[1] / "documents" / "paie" / "receipts"
+_PAYROLL_RECEIPT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+_PERSONAL_FINANCE_DIR = Path(__file__).resolve().parents[1] / "documents" / "finances_personnelles"
+_PERSONAL_FINANCE_EXTENSIONS = {".xlsx"}
+_PERSONAL_FINANCE_TEXT_PREFIX = "personal_finance_workbook:"
 
 
 def _session_signature(timestamp: str) -> str:
@@ -744,6 +753,37 @@ def _copy_page(*, locale: str, message: str = "", error: str = "") -> HTMLRespon
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/copy"), status_code=200)
 
 
+def _agent_payroll_raw_payload(row: AgentPayrollEventRow) -> dict[str, object]:
+    try:
+        payload = json.loads(row.raw_payload_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payroll_receipt_filename(row: AgentPayrollEventRow) -> str:
+    payload = _agent_payroll_raw_payload(row)
+    receipt = payload.get("receipt_filename") or payload.get("receipt_file") or payload.get("receipt_path") or ""
+    filename = str(receipt).replace("\\", "/").rsplit("/", 1)[-1]
+    if not filename or filename in {".", ".."} or Path(filename).name != filename:
+        return ""
+    if Path(filename).suffix.lower() not in _PAYROLL_RECEIPT_EXTENSIONS:
+        return ""
+    return filename
+
+
+def _payroll_receipt_link(row: AgentPayrollEventRow) -> str:
+    payload = _agent_payroll_raw_payload(row)
+    if payload.get("receipt_image_base64"):
+        href = f"/admin/payroll/receipts/event/{row.id}"
+        return f'<a href="{href}" target="_blank" rel="noopener">Ticket compta</a>'
+    filename = _payroll_receipt_filename(row)
+    if not filename:
+        return "—"
+    href = f"/admin/payroll/receipts/{quote(filename, safe='')}"
+    return f'<a href="{href}" target="_blank" rel="noopener">Ticket compta</a>'
+
+
 def _payroll_page(*, locale: str) -> HTMLResponse:
     title = t("nav.payroll", locale)
     engine = _configured_engine()
@@ -765,8 +805,9 @@ def _payroll_page(*, locale: str) -> HTMLResponse:
     total_hours = sum(float(row.impacted_hours or 0) for row in rows)
     total_impact = sum(int(row.payroll_impact_dh or 0) for row in rows)
     pending_count = sum(1 for row in rows if row.status == "À vérifier")
+    payroll_grid = ".75fr 1fr 1.2fr .65fr .65fr .8fr 1.55fr .75fr .8fr"
     table_rows = "".join(
-        "<div class='table-row' style='grid-template-columns:.75fr 1fr 1.2fr .65fr .65fr .8fr 1.6fr .8fr;'>"
+        f"<div class='table-row' style='grid-template-columns:{payroll_grid};'>"
         f"<span>{escape(row.event_date.isoformat() if row.event_date else '')}</span>"
         f"<span>{escape(row.agent_name)}</span>"
         f"<span>{escape(row.event_type)}</span>"
@@ -774,6 +815,7 @@ def _payroll_page(*, locale: str) -> HTMLResponse:
         f"<span>{escape(str(row.impacted_hours) if row.impacted_hours is not None else '—')}</span>"
         f"<span>{escape(str(row.payroll_impact_dh) + ' MAD' if row.payroll_impact_dh is not None else '—')}</span>"
         f"<span>{escape(row.comment or '—')}</span>"
+        f"<span>{_payroll_receipt_link(row)}</span>"
         f"<span>{escape(row.status)}</span>"
         "</div>"
         for row in rows
@@ -795,12 +837,127 @@ def _payroll_page(*, locale: str) -> HTMLResponse:
     <section class="card" style="padding:18px;">
       <h2>Événements agents</h2>
       <div class="table-shell">
-        <div class="table-row table-head" style="grid-template-columns:.75fr 1fr 1.2fr .65fr .65fr .8fr 1.6fr .8fr;"><span>Date</span><span>Agent</span><span>Type</span><span>Prévenu</span><span>Heures</span><span>Impact</span><span>Commentaire</span><span>Statut</span></div>
+        <div class="table-row table-head" style="grid-template-columns:{payroll_grid};"><span>Date</span><span>Agent</span><span>Type</span><span>Prévenu</span><span>Heures</span><span>Impact</span><span>Commentaire</span><span>Ticket</span><span>Statut</span></div>
         {table_rows}
       </div>
     </section>
     """
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/payroll"))
+
+
+def _format_file_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} o"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} Ko"
+    return f"{size_bytes / (1024 * 1024):.1f} Mo"
+
+
+def _safe_personal_finance_filename(filename: str) -> str:
+    safe_name = filename.replace("\\", "/")
+    if "/" in safe_name or safe_name in {"", ".", ".."}:
+        return ""
+    if Path(safe_name).name != safe_name:
+        return ""
+    if Path(safe_name).suffix.lower() not in _PERSONAL_FINANCE_EXTENSIONS:
+        return ""
+    return safe_name
+
+
+def _personal_finance_payload(row: AdminTextRow) -> dict[str, object]:
+    try:
+        payload = json.loads(row.body or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _personal_finance_db_records() -> list[dict[str, object]]:
+    engine = _configured_engine()
+    if engine is None:
+        return []
+    with session_scope(engine) as session:
+        rows = session.scalars(
+            select(AdminTextRow)
+            .where(AdminTextRow.text_key.like(f"{_PERSONAL_FINANCE_TEXT_PREFIX}%"))
+            .order_by(AdminTextRow.text_key.desc())
+        ).all()
+    records: list[dict[str, object]] = []
+    for row in rows:
+        payload = _personal_finance_payload(row)
+        fallback_name = row.text_key.removeprefix(_PERSONAL_FINANCE_TEXT_PREFIX)
+        filename = _safe_personal_finance_filename(str(payload.get("filename") or fallback_name))
+        if not filename:
+            continue
+        try:
+            size_bytes = int(str(payload.get("size_bytes") or "0"))
+        except ValueError:
+            size_bytes = 0
+        records.append(
+            {
+                "filename": filename,
+                "modified": row.updated_at.strftime("%Y-%m-%d %H:%M") if row.updated_at else "—",
+                "size": _format_file_size(size_bytes) if size_bytes else "—",
+                "href": f"/admin/personal-finances/files/{quote(filename, safe='')}",
+            }
+        )
+    return records
+
+
+def _personal_finance_filesystem_records() -> list[dict[str, object]]:
+    if not _PERSONAL_FINANCE_DIR.exists():
+        return []
+    records = []
+    for path in sorted(_PERSONAL_FINANCE_DIR.iterdir(), key=lambda item: item.name, reverse=True):
+        if not path.is_file() or path.suffix.lower() not in _PERSONAL_FINANCE_EXTENSIONS:
+            continue
+        records.append(
+            {
+                "filename": path.name,
+                "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime)),
+                "size": _format_file_size(path.stat().st_size),
+                "href": f"/admin/personal-finances/files/{quote(path.name, safe='')}",
+            }
+        )
+    return records
+
+
+def _personal_finance_records() -> list[dict[str, object]]:
+    records = _personal_finance_db_records()
+    seen = {str(record["filename"]) for record in records}
+    for record in _personal_finance_filesystem_records():
+        if str(record["filename"]) in seen:
+            continue
+        records.append(record)
+    return records
+
+
+def _personal_finances_page(*, locale: str) -> HTMLResponse:
+    title = t("nav.personal_finances", locale)
+    files = _personal_finance_records()
+    table_rows = "".join(
+        "<div class='table-row' style='grid-template-columns:1.4fr .75fr .75fr .6fr;'>"
+        f"<span>{escape(str(record['filename']))}</span>"
+        f"<span>{escape(str(record['modified']))}</span>"
+        f"<span>{escape(str(record['size']))}</span>"
+        f"<span><a href=\"{escape(str(record['href']))}\">Télécharger</a></span>"
+        "</div>"
+        for record in files
+    ) or "<div class='table-row'><span>Aucun fichier de finances personnelles pour le moment.</span><span></span><span></span><span></span></div>"
+    body = f"""
+    <div class="hero"><div><div class="eyebrow">Personnel</div><h1>{escape(title)}</h1><p>Dépenses personnelles et rentrées d’argent personnelles d’Omar, alimentées progressivement depuis WhatsApp.</p></div></div>
+    <section class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Fichiers mensuels</div><div class="metric-value">{len(files)}</div></div>
+    </section>
+    <section class="card" style="padding:18px;">
+      <h2>Fichiers disponibles</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:1.4fr .75fr .75fr .6fr;"><span>Fichier</span><span>Modifié</span><span>Taille</span><span>Action</span></div>
+        {table_rows}
+      </div>
+    </section>
+    """
+    return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/personal-finances"))
 
 
 def _dh_major(amount: int) -> str:
@@ -1511,6 +1668,99 @@ async def admin_copy_submit(request: Request, lang: str | None = Query(default=N
     return RedirectResponse(url=f"/admin/copy?lang={locale}&saved=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.get("/payroll/receipts/event/{event_id}")
+async def admin_payroll_receipt_event(request: Request, event_id: int, lang: str | None = Query(default=None)):
+    locale = normalize_locale(lang or settings.admin_default_locale)
+    if not settings.admin_password:
+        return RedirectResponse(url=f"/admin?lang={locale}", status_code=status.HTTP_303_SEE_OTHER)
+    if not _valid_session_token(request.cookies.get(_SESSION_COOKIE)):
+        return _password_form(locale=locale)
+
+    engine = _configured_engine()
+    if engine is None:
+        return HTMLResponse(content="Not configured", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    with session_scope(engine) as session:
+        row = session.get(AgentPayrollEventRow, event_id)
+        if row is None:
+            return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+        payload = _agent_payroll_raw_payload(row)
+        encoded_image = payload.get("receipt_image_base64")
+        mime_type = str(payload.get("receipt_mime_type") or "image/jpeg")
+        filename = _payroll_receipt_filename(row) or f"payroll-receipt-{event_id}.jpg"
+    if not isinstance(encoded_image, str) or not encoded_image:
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        content = base64.b64decode(encoded_image, validate=True)
+    except Exception:
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+@router.get("/payroll/receipts/{filename}")
+async def admin_payroll_receipt(request: Request, filename: str, lang: str | None = Query(default=None)):
+    locale = normalize_locale(lang or settings.admin_default_locale)
+    if not settings.admin_password:
+        return RedirectResponse(url=f"/admin?lang={locale}", status_code=status.HTTP_303_SEE_OTHER)
+    if not _valid_session_token(request.cookies.get(_SESSION_COOKIE)):
+        return _password_form(locale=locale)
+
+    safe_name = filename.replace("\\", "/")
+    if "/" in safe_name or safe_name in {"", ".", ".."}:
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    path = (_PAYROLL_RECEIPT_DIR / safe_name).resolve()
+    receipt_root = _PAYROLL_RECEIPT_DIR.resolve()
+    if path.parent != receipt_root or path.suffix.lower() not in _PAYROLL_RECEIPT_EXTENSIONS:
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    if not path.is_file():
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(path)
+
+
+@router.get("/personal-finances/files/{filename}")
+async def admin_personal_finance_file(request: Request, filename: str, lang: str | None = Query(default=None)):
+    locale = normalize_locale(lang or settings.admin_default_locale)
+    if not settings.admin_password:
+        return RedirectResponse(url=f"/admin?lang={locale}", status_code=status.HTTP_303_SEE_OTHER)
+    if not _valid_session_token(request.cookies.get(_SESSION_COOKIE)):
+        return _password_form(locale=locale)
+
+    safe_name = _safe_personal_finance_filename(filename)
+    if not safe_name:
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    engine = _configured_engine()
+    if engine is not None:
+        with session_scope(engine) as session:
+            row = session.get(AdminTextRow, f"{_PERSONAL_FINANCE_TEXT_PREFIX}{safe_name}")
+            payload = _personal_finance_payload(row) if row else {}
+        encoded_workbook = payload.get("content_base64")
+        if isinstance(encoded_workbook, str) and encoded_workbook:
+            try:
+                content = base64.b64decode(encoded_workbook, validate=True)
+            except Exception:
+                content = b""
+            if content:
+                return Response(
+                    content=content,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+                )
+
+    path = (_PERSONAL_FINANCE_DIR / safe_name).resolve()
+    finance_root = _PERSONAL_FINANCE_DIR.resolve()
+    if path.parent != finance_root or not path.is_file():
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=path.name,
+    )
+
+
 @router.get("/{page_slug}", response_class=HTMLResponse)
 async def admin_section(request: Request, page_slug: str, lang: str | None = Query(default=None)) -> HTMLResponse:
     locale = normalize_locale(lang or settings.admin_default_locale)
@@ -1549,6 +1799,8 @@ async def admin_section(request: Request, page_slug: str, lang: str | None = Que
         return _tracking_page(locale=locale)
     if page_id == "cash":
         return _cash_page(locale=locale)
+    if page_id == "personal_finances":
+        return _personal_finances_page(locale=locale)
     if page_id == "erasures":
         actor = (request.query_params.get("actor") or "").strip()
         return _erasures_page(locale=locale, actor=actor)

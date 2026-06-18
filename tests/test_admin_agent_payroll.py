@@ -1,3 +1,7 @@
+import base64
+import json
+from datetime import date
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -5,6 +9,7 @@ from app import admin
 from app.agent_payroll import import_agent_payroll_csv, upsert_agent_payroll_manual
 from app.config import settings
 from app.db import init_db, make_engine, session_scope
+from app.models import AgentPayrollEventRow
 
 
 CSV_CONTENT = """Date;Agent;Type;Prévenu ?;Heure début prévue;Heure fin prévue;Heure réelle début;Heure réelle fin;Durée impactée (h);Justificatif;Commentaire;Validé par;Impact paie (MAD);Statut
@@ -56,3 +61,50 @@ def test_admin_payroll_page_shows_imported_csv_rows_and_manual(monkeypatch, tmp_
     assert "Absence non justifiée" in response.text
     assert "N’est pas allé travailler cet après-midi" in response.text
     assert "À vérifier" in response.text
+
+
+def test_admin_payroll_page_links_authenticated_receipt(monkeypatch, tmp_path):
+    db_path = tmp_path / "agent-payroll-receipt.sqlite3"
+    engine = make_engine(f"sqlite+pysqlite:///{db_path}")
+    init_db(engine)
+    monkeypatch.setattr(admin, "_configured_engine", lambda: engine)
+    receipt_dir = tmp_path / "receipts"
+    receipt_dir.mkdir()
+    receipt_file = receipt_dir / "cashplus-mouhcine-400dh.jpg"
+    receipt_file.write_bytes(b"fake receipt image")
+    monkeypatch.setattr(admin, "_PAYROLL_RECEIPT_DIR", receipt_dir)
+    with session_scope(engine) as session:
+        event = AgentPayrollEventRow(
+            event_date=date(2026, 6, 18),
+            agent_name="Mouhcine",
+            event_type="Avance salaire",
+            payroll_impact_dh=400,
+            comment="Agent Hertz Fès — avance salaire 400 DH.",
+            status="Validé",
+            source_file="whatsapp:cashplus:22471262458848",
+            source_row_number=1,
+            raw_payload_json=json.dumps(
+                {
+                    "receipt_filename": receipt_file.name,
+                    "receipt_mime_type": "image/jpeg",
+                    "receipt_image_base64": base64.b64encode(b"fake receipt image").decode("ascii"),
+                }
+            ),
+        )
+        session.add(event)
+        session.flush()
+        event_id = event.id
+
+    client = _client()
+    _login(client)
+
+    page = client.get("/admin/payroll")
+    assert page.status_code == 200
+    assert "Mouhcine" in page.text
+    assert "Ticket compta" in page.text
+    assert f"/admin/payroll/receipts/event/{event_id}" in page.text
+
+    receipt = client.get(f"/admin/payroll/receipts/event/{event_id}")
+    assert receipt.status_code == 200
+    assert receipt.content == b"fake receipt image"
+    assert receipt.headers["content-type"] == "image/jpeg"

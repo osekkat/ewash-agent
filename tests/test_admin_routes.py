@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +14,7 @@ from app.config import settings
 from app.db import init_db, make_engine, session_scope
 from app.main import app
 from app.models import (
+    AdminTextRow,
     BookingRow,
     ConversationEventRow,
     ConversationSessionRow,
@@ -157,6 +160,71 @@ def test_admin_login_omits_secure_cookie_when_setting_disabled(monkeypatch):
     assert "ewash_admin_session" in set_cookie
     assert "Secure" not in set_cookie
     assert "HttpOnly" in set_cookie
+
+
+def test_admin_personal_finances_page_lists_and_serves_monthly_file(monkeypatch, tmp_path):
+    finance_dir = tmp_path / "finances_personnelles"
+    finance_dir.mkdir()
+    monthly_file = finance_dir / "finances_personnelles_2026-06.xlsx"
+    monthly_file.write_bytes(b"fake personal finance workbook")
+    monkeypatch.setattr(admin_module, "_PERSONAL_FINANCE_DIR", finance_dir)
+    monkeypatch.setattr(settings, "admin_password", "secret-pass")
+    client = TestClient(app)
+    client.post(
+        "/admin",
+        content="password=secret-pass",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    page = client.get("/admin/personal-finances")
+
+    assert page.status_code == 200
+    assert "Finances perso" in page.text
+    assert "Dépenses personnelles" in page.text
+    assert monthly_file.name in page.text
+    assert f"/admin/personal-finances/files/{monthly_file.name}" in page.text
+
+    download = client.get(f"/admin/personal-finances/files/{monthly_file.name}")
+    assert download.status_code == 200
+    assert download.content == b"fake personal finance workbook"
+    assert download.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_admin_personal_finances_page_lists_and_serves_db_workbook(monkeypatch, tmp_path):
+    db_url = f"sqlite+pysqlite:///{tmp_path / 'personal-finances.db'}"
+    engine = make_engine(db_url)
+    init_db(engine)
+    finance_dir = tmp_path / "empty_finances_personnelles"
+    finance_dir.mkdir()
+    monkeypatch.setattr(admin_module, "_PERSONAL_FINANCE_DIR", finance_dir)
+    workbook_name = "finances_personnelles_2026-06.xlsx"
+    workbook_bytes = b"db-backed personal finance workbook"
+    with session_scope(engine) as session:
+        session.add(
+            AdminTextRow(
+                text_key=f"personal_finance_workbook:{workbook_name}",
+                title=workbook_name,
+                body=json.dumps(
+                    {
+                        "filename": workbook_name,
+                        "content_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+                        "size_bytes": len(workbook_bytes),
+                    }
+                ),
+            )
+        )
+    client = _logged_in_admin_client(monkeypatch, db_url)
+
+    page = client.get("/admin/personal-finances")
+
+    assert page.status_code == 200
+    assert workbook_name in page.text
+    assert f"{len(workbook_bytes)} o" in page.text
+
+    download = client.get(f"/admin/personal-finances/files/{workbook_name}")
+    assert download.status_code == 200
+    assert download.content == workbook_bytes
+    assert download.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _sample_booking() -> Booking:

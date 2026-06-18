@@ -32,6 +32,7 @@ def test_admin_navigation_is_localized():
         "Clients",
         "Paie agents",
         "Suivi opérationnel",
+        "Finances perso",
         "Effacements",
         "Prix",
         "Promos",
@@ -42,11 +43,12 @@ def test_admin_navigation_is_localized():
         "Centres",
         "Textes",
     ]
-    assert admin_nav_labels("en")[:6] == [
+    assert admin_nav_labels("en")[:7] == [
         "Dashboard",
         "Bookings",
         "Customers",
         "Agent payroll",
         "Operational tracking",
+        "Personal finance",
         "Erasures",
     ]
