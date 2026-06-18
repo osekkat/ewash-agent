@@ -12,3 +12,9 @@ __pycache__/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# Private back-office documents generated from WhatsApp/admin workflows.
+# Keep the data in the production DB or local secure storage, not in the public repo.
+documents/finances_personnelles/
+documents/paie/*.xlsx
+documents/paie/receipts/
