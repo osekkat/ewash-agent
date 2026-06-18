@@ -51,7 +51,7 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
     <div className="app-scroll">
       <div className="appbar">
         <div className="row gap-10">
-          <img src="assets/ewash_logo_only.png" width={32} height={32} alt="ewash"
+          <img src="assets/ewash_logo_only.png" width={32} height={32} alt="Ewash"
             style={{ display: 'block', flexShrink: 0 }}/>
           {profile.name ? (
             <div className="col" style={{ gap: 2 }}>
@@ -90,23 +90,12 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
         <div className="hero">
           <div style={{
             fontFamily: 'var(--font-display)', fontWeight: 800,
-            fontSize: 28, lineHeight: 1.05, color: '#fff',
-            marginBottom: 8, position: 'relative', zIndex: 1,
-            letterSpacing: '-0.02em', maxWidth: 240,
+            fontSize: 30, lineHeight: 1.05, color: '#fff',
+            margin: '0 auto 18px', position: 'relative', zIndex: 1,
+            letterSpacing: '-0.02em', maxWidth: 280,
+            textAlign: 'center', whiteSpace: 'pre-line',
           }}>
-            {lang === 'ar' ? 'سيارة نظيفة، بدون قطرة ماء.' : 'Voiture propre,\nzéro goutte d’eau.'}
-          </div>
-          <div style={{
-            fontFamily: 'var(--font-display)', fontWeight: 700,
-            fontSize: 18, color: '#fff',
-            letterSpacing: '-0.01em',
-            marginBottom: 6, position: 'relative', zIndex: 1,
-            opacity: 0.95,
-          }}>
-            e-wash
-          </div>
-          <div style={{ color: 'rgba(255,255,255,0.78)', fontSize: 13.5, marginBottom: 18, position: 'relative', zIndex: 1, maxWidth: 250 }}>
-            {t.tagline}
+            {lang === 'ar' ? 'Ewash\nغسيل سيارات بدون ماء' : 'Ewash\nLavage auto sans eau'}
           </div>
           <button onClick={openBooking}
             className="press"
@@ -288,7 +277,7 @@ function _openBookingHelp(booking, staffContact, fallback, intent) {
   if (window.EwashLog) {
     window.EwashLog.info('home.next_appointment.' + intent, { ref: booking && booking.ref });
   }
-  const phone = staffContact && staffContact.whatsapp_phone;
+  const phone = (staffContact && staffContact.whatsapp_phone) || window.EWASH_OFFICIAL_WHATSAPP;
   const action = intent === 'edit' ? 'modifier' : 'suivre';
   const text = "Bonjour, je souhaite " + action + " ma réservation Ewash " + ((booking && booking.ref) || '') + ".";
   const url = phone ? _waLinkFor(phone, text) : ('https://wa.me/?text=' + encodeURIComponent(text));
@@ -306,7 +295,7 @@ function _openBookingHelp(booking, staffContact, fallback, intent) {
 // lets the user pick a contact themselves.
 function _openTeamChat(t, staffContact) {
   if (window.EwashLog) window.EwashLog.info('home.talk_team.opened', {});
-  const phone = staffContact && staffContact.whatsapp_phone;
+  const phone = (staffContact && staffContact.whatsapp_phone) || window.EWASH_OFFICIAL_WHATSAPP;
   const text = (t && t.talkTeamMessage) ||
     "Bonjour Ewash, je souhaite discuter avec votre équipe.";
   const url = phone
@@ -969,6 +958,7 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
     esthetique: [],
   });
   const [reloadTick, setReloadTick] = useS_h(0);
+  const [selectedDetailingIds, setSelectedDetailingIds] = useS_h([]);
 
   useE_h(() => {
     let alive = true;
@@ -1019,7 +1009,23 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
     return function () { alive = false; };
   }, [reloadTick]);
 
+  useE_h(() => {
+    setSelectedDetailingIds((prev) => prev.filter((id) => catalogState.esthetique.some((item) => item.id === id)));
+  }, [catalogState.esthetique]);
+
+  const isDetailingTab = tab === 'esthetique';
   const items = tab === 'lavage' ? catalogState.lavage : catalogState.esthetique;
+  const selectedDetailingItems = catalogState.esthetique.filter((item) => selectedDetailingIds.includes(item.id));
+  const selectedDetailingTotal = selectedDetailingItems.reduce((sum, item) => sum + (item.prices.A || 0), 0);
+  const toggleDetailingService = (id) => {
+    setSelectedDetailingIds((prev) => prev.includes(id)
+      ? prev.filter((itemId) => itemId !== id)
+      : prev.concat(id));
+  };
+  const startDetailingBooking = () => {
+    if (!selectedDetailingIds.length) return;
+    openBooking({ addons: selectedDetailingIds, source: 'services_detailing' });
+  };
   return (
     <div className="app-scroll">
       <TopBar title={t.tariffs} t={t} staffContact={staffContact} currentScreen="services" />
@@ -1028,8 +1034,12 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
           {['lavage', 'esthetique'].map(k => (
             <button key={k} onClick={() => setTab(k)} style={{
               flex: 1, padding: '11px 16px', borderRadius: 999,
-              background: tab === k ? 'var(--surface)' : 'transparent',
-              color: tab === k ? 'var(--text)' : 'var(--text-2)',
+              background: tab === k
+                ? (k === 'esthetique' ? 'linear-gradient(135deg, var(--sun), var(--gold))' : 'var(--surface)')
+                : 'transparent',
+              color: tab === k
+                ? (k === 'esthetique' ? '#19201a' : 'var(--text)')
+                : 'var(--text-2)',
               fontWeight: tab === k ? 700 : 600, fontSize: 13.5,
               letterSpacing: '-0.005em',
               boxShadow: tab === k
@@ -1050,6 +1060,21 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
             A : Citadine · B : Petite berline / SUV · C : Grande berline / SUV
           </div>
         </div>
+
+        {isDetailingTab && (
+          <div className="card-soft" style={{
+            padding: 14, borderRadius: 18,
+            display: 'flex', gap: 10, alignItems: 'center',
+            border: '1px solid color-mix(in srgb, var(--gold) 45%, transparent)',
+            background: 'linear-gradient(135deg, color-mix(in srgb, var(--sun) 18%, var(--surface)), color-mix(in srgb, var(--gold) 14%, var(--surface)))',
+          }}>
+            <Icons.Sparkle size={20} style={{ color: 'var(--gold-deep)' }} />
+            <div className="t-muted" style={{ flex: 1, fontSize: 12.5 }}>
+              <strong style={{ color: 'var(--text)' }}>{t.detailingMultiSelectTitle || 'Prestations cumulables'}</strong><br/>
+              {t.detailingMultiSelectSub || 'Sélectionnez plusieurs prestations esthétique, puis prenez rendez-vous en une seule demande.'}
+            </div>
+          </div>
+        )}
 
         {catalogState.loading && (
           <div className="card-soft" style={{ padding: 16, borderRadius: 18 }}>
@@ -1075,16 +1100,51 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
         {items.map((s, i) => {
           const categoryPrices = TARIFF_CATEGORIES.map(c => s.prices[c]);
           const flat = categoryPrices.every(price => price === categoryPrices[0]);
+          const selected = isDetailingTab && selectedDetailingIds.includes(s.id);
           return (
-            <div key={i} className="card card-elev" style={{ padding: 16 }}>
-              <div className="row between mb-8">
-                <div className="col gap-4">
+            <div
+              key={i}
+              className="card card-elev"
+              onClick={isDetailingTab ? () => toggleDetailingService(s.id) : undefined}
+              role={isDetailingTab ? 'button' : undefined}
+              tabIndex={isDetailingTab ? 0 : undefined}
+              onKeyDown={isDetailingTab ? (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggleDetailingService(s.id);
+                }
+              } : undefined}
+              style={{
+                padding: 16,
+                cursor: isDetailingTab ? 'pointer' : 'default',
+                border: selected ? '1.5px solid var(--gold-deep)' : undefined,
+                background: selected
+                  ? 'linear-gradient(135deg, color-mix(in srgb, var(--sun) 16%, var(--surface)), color-mix(in srgb, var(--gold) 12%, var(--surface)))'
+                  : undefined,
+                boxShadow: selected
+                  ? '0 0 0 1px color-mix(in srgb, var(--gold-deep) 35%, transparent), 0 10px 24px -12px color-mix(in srgb, var(--gold-deep) 55%, transparent)'
+                  : undefined,
+              }}>
+              <div className="row between mb-8" style={{ gap: 12, alignItems: 'flex-start' }}>
+                <div className="col gap-4" style={{ minWidth: 0 }}>
                   <div className="row gap-8">
                     <div style={{ fontWeight: 700, fontSize: 15.5 }}>{s.name}</div>
                     {s.popular && <span className="chip chip-primary" style={{ fontSize: 10.5, padding: '2px 8px' }}>★ {t.mostPopular}</span>}
                   </div>
                   <div className="t-muted">{s.desc}</div>
                 </div>
+                {isDetailingTab && (
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 9,
+                    border: `2px solid ${selected ? 'var(--gold-deep)' : 'var(--border-strong)'}`,
+                    background: selected ? 'linear-gradient(135deg, var(--sun), var(--gold))' : 'transparent',
+                    color: '#19201a',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    {selected && <Icons.Check size={15} stroke={3}/>}
+                  </div>
+                )}
               </div>
               <div className="row gap-6 mb-12">
                 <span className="chip"><Icons.Clock size={12}/> {s.durationMin} {t.min}</span>
@@ -1099,7 +1159,7 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
                   <span className="t-tiny" style={{ letterSpacing: '0.1em', fontWeight: 700, color: 'var(--text-2)' }}>
                     TOUTES CATÉGORIES
                   </span>
-                  <span className="t-num" style={{ fontWeight: 800, fontSize: 22, color: 'var(--text)', letterSpacing: '-0.02em' }}>
+                  <span className="t-num" style={{ fontWeight: 800, fontSize: 22, color: isDetailingTab ? 'var(--gold-deep)' : 'var(--text)', letterSpacing: '-0.02em' }}>
                     {s.prices.A}<span style={{ fontSize: 12, color: 'var(--text-2)', marginInlineStart: 4 }}>DH</span>
                   </span>
                 </div>
@@ -1113,19 +1173,47 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
                       boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4)',
                     }}>
                       <div className="t-tiny" style={{ letterSpacing: '0.12em', fontWeight: 800, color: 'var(--text-3)' }}>{c}</div>
-                      <div className="t-num" style={{ fontWeight: 800, fontSize: 17, color: 'var(--text)', marginTop: 2, letterSpacing: '-0.015em' }}>
+                      <div className="t-num" style={{ fontWeight: 800, fontSize: 17, color: isDetailingTab ? 'var(--gold-deep)' : 'var(--text)', marginTop: 2, letterSpacing: '-0.015em' }}>
                         {s.prices[c]}<span style={{ fontSize: 10, color: 'var(--text-2)', marginInlineStart: 2 }}>DH</span>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-              <Btn variant="soft" block style={{ marginTop: 12 }} onClick={openBooking}>
-                {t.bookCta}
-              </Btn>
+              {!isDetailingTab && (
+                <Btn variant="soft" block style={{ marginTop: 12 }} onClick={openBooking}>
+                  {t.bookCta}
+                </Btn>
+              )}
             </div>
           );
         })}
+        {isDetailingTab && !catalogState.loading && !catalogState.error && (
+          <CtaDock>
+            <div className="row between mb-8" style={{ paddingInline: 4, gap: 12 }}>
+              <div className="col gap-2">
+                <span className="t-muted" style={{ fontSize: 13 }}>{t.selectedServices || 'Prestations sélectionnées'}</span>
+                <span className="t-tiny">
+                  {selectedDetailingIds.length} · {selectedDetailingTotal}<span style={{ marginInlineStart: 3 }}>DH</span>
+                </span>
+              </div>
+              <button type="button" className="chip" onClick={() => setSelectedDetailingIds([])} disabled={!selectedDetailingIds.length}
+                style={{ opacity: selectedDetailingIds.length ? 1 : 0.45 }}>
+                {t.clear || 'Effacer'}
+              </button>
+            </div>
+            <Btn block lg disabled={!selectedDetailingIds.length} onClick={startDetailingBooking}
+              style={{
+                opacity: selectedDetailingIds.length ? 1 : 0.45,
+                background: selectedDetailingIds.length ? 'linear-gradient(135deg, var(--sun), var(--gold))' : undefined,
+                color: selectedDetailingIds.length ? '#19201a' : undefined,
+              }}>
+              {selectedDetailingIds.length > 0
+                ? ((t.bookSelectedDetailing || 'Prendre RDV avec {count} prestations').replace('{count}', selectedDetailingIds.length))
+                : (t.selectDetailingFirst || 'Sélectionnez au moins une prestation')}
+            </Btn>
+          </CtaDock>
+        )}
       </div>
     </div>
   );
@@ -1155,7 +1243,7 @@ function _clearLocalAuthState() {
   });
 }
 
-function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant, profile, staffContact, onToast, onLogout }) {
+function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant, profile, staffContact, onOpenSupport, onToast, onLogout }) {
   const [confirmingAllOut, setConfirmingAllOut] = useS_h(false);
   const [confirmingDelete, setConfirmingDelete] = useS_h(false);
   const [logoutBusy, setLogoutBusy] = useS_h(null);
@@ -1344,7 +1432,7 @@ function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant,
         </ProfileSection>
 
         <ProfileSection>
-          <ProfileRow icon={<Icons.Message size={18}/>} label={t.helpCenter} />
+          <ProfileRow icon={<Icons.Message size={18}/>} label={t.helpCenter} onClick={onOpenSupport || (() => _openTeamChat(t, staffContact))} />
           {profile.name && (
             <ProfileRow
               icon={<Icons.LogOut size={18}/>}
@@ -1381,7 +1469,7 @@ function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant,
         )}
 
         <div className="text-center t-tiny" style={{ paddingBlock: 8 }}>
-          ewash · {t.appVersion} 1.0.0 (Casablanca)
+          Ewash · {t.appVersion} 1.0.0 (Casablanca)
         </div>
       </div>
       <LogoutEverywhereSheet

@@ -2,6 +2,8 @@
 // ewash — shared UI components
 
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
+const EWASH_OFFICIAL_WHATSAPP = '+212' + '611204502';
+window.EWASH_OFFICIAL_WHATSAPP = EWASH_OFFICIAL_WHATSAPP;
 
 // ─────────────────────────────────────────────────────────────
 // Logo block (uses uploaded logo image; falls back to wordmark)
@@ -9,7 +11,7 @@ const { useState, useEffect, useRef, useMemo, useCallback } = React;
 function Wordmark({ size = 24, color }) {
   return (
     <span className="wordmark" style={{ fontSize: size, color: color || 'var(--primary)' }}>
-      ewash
+      Ewash
     </span>
   );
 }
@@ -26,7 +28,7 @@ function LogoStack({ variant }) {
         src={isEco ? 'assets/ewash-logo.png' : 'assets/ewash_logo_only.png'}
         width={isEco ? 92 : 76}
         height={isEco ? 92 : 76}
-        alt="ewash"
+        alt="Ewash"
         style={{ display: 'block' }}
       />
     </div>
@@ -46,15 +48,19 @@ function _helpMessage(t, currentScreen) {
   return template.replace('{screen}', currentScreen || 'app');
 }
 
+function _helpPhoneDigits(staffContact) {
+  const raw = (staffContact && staffContact.whatsapp_phone) || EWASH_OFFICIAL_WHATSAPP;
+  return String(raw || '').replace(/[^0-9]/g, '');
+}
+
 function _canOpenHelp(staffContact) {
-  const digits = String((staffContact && staffContact.whatsapp_phone) || '').replace(/[^0-9]/g, '');
-  return !!(staffContact && staffContact.available && digits);
+  return !!_helpPhoneDigits(staffContact);
 }
 
 function _openHelp(staffContact, currentScreen, t) {
   if (!_canOpenHelp(staffContact)) return;
   if (window.EwashLog) window.EwashLog.info('help.opened', { from_screen: currentScreen || 'app' });
-  const phone = String(staffContact.whatsapp_phone || '').replace(/[^0-9]/g, '');
+  const phone = _helpPhoneDigits(staffContact);
   const url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(_helpMessage(t, currentScreen));
   window.open(url, '_blank', 'noopener,noreferrer');
 }

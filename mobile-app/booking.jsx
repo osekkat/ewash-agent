@@ -7,9 +7,10 @@ const { useState: useS_b, useEffect: useE_b, useMemo: useM_b } = React;
 const STEPS_CAR = ['category', 'vehicle', 'location', 'service', 'date', 'note'];
 const STEPS_MOTO = ['category', 'location', 'service', 'date', 'note'];
 const MOTO_CATEGORY = 'MOTO';
-const DEFAULT_STAFF_CONTACT = { available: false, whatsapp_phone: '' };
-const FALLBACK_STAFF_WHATSAPP = '+212611204502';
+const DEFAULT_STAFF_CONTACT = { available: true, whatsapp_phone: (window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502')) };
+const FALLBACK_STAFF_WHATSAPP = window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502');
 const BOOKING_DRAFT_STORAGE_KEY = 'ewash.booking_draft';
+
 const BOOKING_DRAFT_MAX_AGE_MS = 60 * 60 * 1000;
 const BOOKING_DRAFT_SCHEMA_VERSION = 1;
 const LEGACY_DEFAULT_PIN_ADDRESS = '173 Bd Anfa, Casablanca';
@@ -115,7 +116,19 @@ function _bookingDataSize(data) {
   }
 }
 
-function _initialBookingData(profile) {
+function _prefillAddons(prefill) {
+  if (!prefill || !Array.isArray(prefill.addons)) return [];
+  const seen = new Set();
+  return prefill.addons
+    .filter((id) => typeof id === 'string' && id)
+    .filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+}
+
+function _initialBookingData(profile, prefill) {
   return {
     name: (profile && profile.name) || '',
     // Pre-fill from the stored profile for returning users. New (anonymous)
@@ -133,7 +146,7 @@ function _initialBookingData(profile) {
     date: null, // { d, m, y, label }
     time: null,
     note: '',
-    addons: [],
+    addons: _prefillAddons(prefill),
     clientRequestId: null,
   };
 }
@@ -394,12 +407,12 @@ function _markHandled(err) {
 // ─────────────────────────────────────────────────────────────
 // BOOKING ROOT — state machine
 // ─────────────────────────────────────────────────────────────
-function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, staffContact: appStaffContact }) {
-  const [draftAtOpen] = useS_b(() => _loadDraft());
+function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, prefill, staffContact: appStaffContact }) {
+  const [draftAtOpen] = useS_b(() => (_prefillAddons(prefill).length ? null : _loadDraft()));
   const [showDraftBanner, setShowDraftBanner] = useS_b(() => !!draftAtOpen);
   const [data, setData] = useS_b(() => draftAtOpen
     ? _restoreDraftData(profile, draftAtOpen.data, draftAtOpen.clientRequestId)
-    : _initialBookingData(profile));
+    : _initialBookingData(profile, prefill));
 
   const [step, setStep] = useS_b(() => draftAtOpen && draftAtOpen.step ? draftAtOpen.step : 'category');
   const [history, setHistory] = useS_b(() => Array.isArray(draftAtOpen && draftAtOpen.history)
@@ -863,7 +876,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, st
                 make: v.make || '',
                 color: v.color || '',
                 service: null,
-                addons: [],
+                addons: data.addons || [],
                 promoCode: null,
                 promoApplied: false,
               });
@@ -1220,7 +1233,7 @@ function CategoryStep({ t, data, patch, categories, vehicleHistory, onPickPastVe
             onClick={() => patch({
               category: c.id,
               service: null,
-              addons: [],
+              addons: data.addons || [],
               promoCode: null,
               promoApplied: false,
             })}

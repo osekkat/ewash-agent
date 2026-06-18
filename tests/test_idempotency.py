@@ -7,6 +7,8 @@ PWA's retry to allocate a fresh `EW-YYYY-####` ref and bill the slot twice.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -21,6 +23,10 @@ from app.models import BookingRow, Customer, CustomerTokenRow
 from app.persistence import find_booking_by_client_request_id
 from app.rate_limit import limiter
 from app.security import hash_token
+
+
+def _future_booking_date() -> str:
+    return (datetime.now(timezone.utc).date() + timedelta(days=7)).isoformat()
 
 
 def _engine_with_customer(phone: str = "212600000200"):
@@ -73,7 +79,7 @@ def _booking_payload(**overrides) -> dict:
         },
         "promo_code": "ys26",
         "service_id": "svc_cpl",
-        "date": "2026-06-15",
+        "date": _future_booking_date(),
         "slot": "slot_9_11",
         "note": "Sonner deux fois",
         "addon_ids": [],

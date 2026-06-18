@@ -1,6 +1,6 @@
 {
-  "name": "ewash · Lavage écologique",
-  "short_name": "ewash",
+  "name": "Ewash · Lavage écologique",
+  "short_name": "Ewash",
   "description": "Réservation de lavage auto écologique sans eau",
   "start_url": "./index.html?pwa=1",
   "scope": "./",

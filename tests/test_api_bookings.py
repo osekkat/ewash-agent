@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from unittest import TestCase
 
@@ -30,6 +30,10 @@ from app.rate_limit import limiter
 from app.security import hash_token
 
 case = TestCase()
+
+
+def _future_booking_date() -> str:
+    return (datetime.now(timezone.utc).date() + timedelta(days=7)).isoformat()
 
 
 def _client(
@@ -80,7 +84,7 @@ def _payload(**overrides) -> dict:
         },
         "promo_code": "ys26",
         "service_id": "svc_cpl",
-        "date": "2026-06-15",
+        "date": _future_booking_date(),
         "slot": "slot_9_11",
         "note": "  Sonner   deux fois\u0000  ",
         "addon_ids": [],
@@ -147,7 +151,7 @@ def test_create_booking_happy_path_persists_pending_api_booking(api_db, caplog):
         assert row.location_address == "Villa Oussama"
         assert row.note == "Sonner deux fois"
         assert row.client_request_id == "booking-1234"
-        assert row.appointment_date.isoformat() == "2026-06-15"
+        assert row.appointment_date.isoformat() == _future_booking_date()
         assert row.slot_id == "slot_9_11"
         assert row.appointment_start_at.hour == 9
         assert row.appointment_end_at.hour == 11
@@ -194,7 +198,7 @@ def test_create_booking_minimal_home_payload_persists_empty_strings_not_null(api
         "category": "A",
         "location": {"kind": "home"},
         "service_id": "svc_cpl",
-        "date": "2026-06-15",
+        "date": _future_booking_date(),
         "slot": "slot_9_11",
     }
 

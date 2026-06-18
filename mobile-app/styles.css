@@ -461,9 +461,10 @@ button.chip:active { transform: scale(0.95); }
    * .bottom-nav: don't depend on the [data-pwa-standalone] JS attribute
    * being set before first paint. */
   padding: calc(10px + env(safe-area-inset-top)) 16px 8px;
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  backdrop-filter: blur(12px) saturate(140%);
+  background: #fff;
+  border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   position: sticky;
   top: 0;
   z-index: 5;
@@ -472,15 +473,16 @@ button.chip:active { transform: scale(0.95); }
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 17px;
-  color: var(--text);
+  color: #10201d;
 }
+.appbar .t-tiny { color: #5f6f68; }
 .icon-btn {
   width: 40px; height: 40px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text);
+  color: #10201d;
   transition:
     background 0.18s var(--ease-soft),
     transform 0.16s var(--ease-spring);

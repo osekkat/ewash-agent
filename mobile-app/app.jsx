@@ -84,6 +84,26 @@ function DebugOverlay() {
   );
 }
 
+const EWASH_LANG_STORAGE_KEY = 'ewash.lang';
+
+function _readStoredLang() {
+  try {
+    if (typeof localStorage === 'undefined') return '';
+    const stored = localStorage.getItem(EWASH_LANG_STORAGE_KEY) || '';
+    return ['fr', 'ar'].includes(stored) ? stored : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function _writeStoredLang(lang) {
+  try {
+    if (typeof localStorage !== 'undefined' && ['fr', 'ar'].includes(lang)) {
+      localStorage.setItem(EWASH_LANG_STORAGE_KEY, lang);
+    }
+  } catch (_) {}
+}
+
 function _readStoredProfile() {
   try {
     const nameKey = (window.EwashAPI && window.EwashAPI._NAME_KEY) || 'ewash.name';
@@ -97,26 +117,36 @@ function _readStoredProfile() {
   }
 }
 
+function _initialPhase() {
+  const profile = _readStoredProfile();
+  return (_readStoredLang() || profile.name || profile.phone) ? 'app' : 'lang';
+}
+
 // ─────────────────────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────────────────────
 function App() {
-  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [tweaks, setTweak] = useTweaks(Object.assign({}, TWEAK_DEFAULTS, { lang: _readStoredLang() || TWEAK_DEFAULTS.lang }));
   const { variant, theme, lang } = tweaks;
 
   const t = window.I18N[lang] || window.I18N.fr;
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
 
   // App-level navigation state
-  const [phase, setPhase] = useS_a('lang');
-  // phase: splash → lang → app. Phone/OTP removed — phone is collected in the booking recap.
+  const [phase, setPhase] = useS_a(_initialPhase);
+  // phase: splash → lang → app. Language is requested once, then editable from Profile.
   const [tab, setTab] = useS_a('home'); // home, bookings, services, profile
   const [modal, setModal] = useS_a(null); // 'booking' | 'support' | null
+  const [bookingPrefill, setBookingPrefill] = useS_a(null);
   const [toast, setToast] = useS_a(null);
   // App-level staff_contact, sourced from the bootstrap endpoint once at
   // startup. Used by BookingsScreen's detail modal "Contacter le support"
-  // CTA — booking.jsx fetches its own bootstrap inside the flow.
-  const [staffContact, setStaffContact] = useS_a({ available: false, whatsapp_phone: '' });
+  // CTA — booking.jsx fetches its own bootstrap inside the flow. Keep the
+  // official Ewash WhatsApp as a guaranteed fallback so help works immediately.
+  const [staffContact, setStaffContact] = useS_a(() => ({
+    available: true,
+    whatsapp_phone: window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502'),
+  }));
 
   const log = window.EwashLog;
   const setPhaseLogged = (next) => {
@@ -126,6 +156,22 @@ function App() {
   const setTabLogged = (next) => {
     if (log && next !== tab) log.info('lifecycle.tab', { from_tab: tab, to_tab: next });
     setTab(next);
+  };
+  const setLangStored = (next) => {
+    _writeStoredLang(next);
+    setTweak('lang', next);
+  };
+  const openBookingModal = (prefill) => {
+    setBookingPrefill(prefill || null);
+    setModal('booking');
+  };
+  const closeBookingModal = () => {
+    setBookingPrefill(null);
+    setModal(null);
+  };
+  const openSupportWhatsApp = () => {
+    if (typeof _openTeamChat === 'function') _openTeamChat(t, staffContact);
+    else setModal('support');
   };
 
   // Anonymous-until-first-booking: name/phone are empty for new users and get
@@ -172,10 +218,10 @@ function App() {
     let alive = true;
     window.EwashAPI.getBootstrap({}).then((b) => {
       if (!alive || !b || !b.staff_contact) return;
-      setStaffContact(b.staff_contact);
+      const phone = b.staff_contact.whatsapp_phone || window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502');
+      setStaffContact({ available: true, whatsapp_phone: phone });
     }).catch(() => {
-      // Stay on the default { available: false }. The Contact-Support CTA
-      // simply won't appear, which is the right degraded behaviour.
+      // Stay on the official WhatsApp fallback.
     });
     return () => { alive = false; };
   }, []);
@@ -186,8 +232,8 @@ function App() {
     phaseContent = <SplashScreen t={t} onDone={() => setPhaseLogged('lang')} />;
   } else if (phase === 'lang') {
     phaseContent = <LangScreen t={t} lang={lang}
-      setLang={(l) => setTweak('lang', l)}
-      onDone={() => setPhaseLogged('app')}/>;
+      setLang={setLangStored}
+      onDone={() => { _writeStoredLang(lang); setPhaseLogged('app'); }}/>
   } else if (phase === 'app') {
     phaseContent = (
       <>
@@ -195,36 +241,38 @@ function App() {
           <HomeScreen t={t} lang={lang} variant={variant} theme={theme}
             profile={profile}
             staffContact={staffContact}
-            openBooking={() => setModal('booking')}
-            gotoSupport={() => setModal('support')}
+            openBooking={openBookingModal}
+            gotoSupport={openSupportWhatsApp}
             gotoTariffs={() => setTabLogged('services')}/>
         )}
         {!modal && tab === 'bookings' && (
-          <BookingsScreen t={t} lang={lang} openBooking={() => setModal('booking')} theme={theme}
+          <BookingsScreen t={t} lang={lang} openBooking={openBookingModal} theme={theme}
             staffContact={staffContact}/>
         )}
         {!modal && tab === 'services' && (
-          <ServicesScreen t={t} lang={lang} openBooking={() => setModal('booking')} theme={theme}
+          <ServicesScreen t={t} lang={lang} openBooking={openBookingModal} theme={theme}
             staffContact={staffContact}/>
         )}
         {!modal && tab === 'profile' && (
           <ProfileScreen t={t} lang={lang}
-            setLang={(l) => setTweak('lang', l)}
+            setLang={setLangStored}
             theme={theme}
             setTheme={(th) => setTweak('theme', th)}
             variant={variant}
             setVariant={(v) => setTweak('variant', v)}
             profile={profile}
             staffContact={staffContact}
+            onOpenSupport={openSupportWhatsApp}
             onToast={setToast}
             onLogout={() => { refreshProfile(); setPhaseLogged('lang'); setTabLogged('home'); }}/>
         )}
         {modal === 'booking' && (
           <BookingFlow t={t} lang={lang} theme={theme} variant={variant}
             profile={profile}
+            prefill={bookingPrefill}
             staffContact={staffContact}
-            onClose={() => setModal(null)}
-            onComplete={() => { refreshProfile(); setModal(null); setTabLogged('home'); setToast(t.bookingConfirmed); }}/>
+            onClose={closeBookingModal}
+            onComplete={() => { refreshProfile(); closeBookingModal(); setTabLogged('home'); setToast(t.bookingConfirmed); }}/>
         )}
         {modal === 'support' && (
           <SupportScreen t={t} theme={theme} staffContact={staffContact}
@@ -247,7 +295,7 @@ function App() {
       ) : (
         <div className="stage" dir={dir}>
           <div className="stage-inner">
-            <span className="stage-label">ewash · Android · {variant} · {lang.toUpperCase()}</span>
+            <span className="stage-label">Ewash · Android · {variant} · {lang.toUpperCase()}</span>
             <EwashFrame theme={theme}>
               <div className="app-root" dir={dir} style={{ direction: dir }}>
                 {phaseContent}
@@ -274,7 +322,7 @@ function App() {
           ]}/>
         <TweakSection label="Localization" />
         <TweakRadio label="Language" value={lang}
-          onChange={(v) => setTweak('lang', v)}
+          onChange={setLangStored}
           options={[
             { label: 'FR', value: 'fr' },
             { label: 'AR', value: 'ar' },

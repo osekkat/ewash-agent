@@ -17,6 +17,7 @@ These tests pin the contract end-to-end:
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest import TestCase
 
 import pytest
@@ -33,6 +34,10 @@ from app.rate_limit import limiter
 case = TestCase()
 
 CANONICAL_PHONE = "212611204502"
+
+
+def _future_booking_date() -> str:
+    return (datetime.now(timezone.utc).date() + timedelta(days=7)).isoformat()
 
 
 @pytest.fixture
@@ -68,7 +73,7 @@ def _payload(**overrides) -> dict:
         "vehicle": {"make": "Clio", "color": "Bleu"},
         "location": {"kind": "home", "pin_address": "Villa X"},
         "service_id": "svc_cpl",
-        "date": "2026-06-15",
+        "date": _future_booking_date(),
         "slot": "slot_9_11",
         "addon_ids": [],
     }

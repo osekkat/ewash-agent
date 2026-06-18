@@ -36,10 +36,10 @@ function SplashScreen({ onDone, t }) {
           border: '1px solid rgba(255,255,255,0.18)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <img src="assets/ewash-logo.png" width={72} height={72} alt="ewash"
+          <img src="assets/ewash-logo.png" width={72} height={72} alt="Ewash"
             style={{ display: 'block', filter: 'brightness(1.05)' }}/>
         </div>
-        <div className="t-display" style={{ color: '#fff', fontSize: 36 }}>ewash</div>
+        <div className="t-display" style={{ color: '#fff', fontSize: 36 }}>Ewash</div>
         <div style={{ opacity: 0.75, fontSize: 14, fontWeight: 500, textAlign: 'center', maxWidth: 240 }}>
           {t.tagline}
         </div>
@@ -61,7 +61,7 @@ function LangScreen({ onDone, t, lang, setLang }) {
   return (
     <div className="col" style={{ flex: 1 }}>
       <div className="col gap-16 px-20" style={{ paddingTop: 32 }}>
-        <img src="assets/ewash_logo_only.png" width={44} height={44} alt="ewash"
+        <img src="assets/ewash_logo_only.png" width={44} height={44} alt="Ewash"
           style={{ display: 'block' }}/>
         <div className="col gap-6">
           <div className="t-h1">{t.chooseLang}</div>
