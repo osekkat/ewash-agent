@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from datetime import date as date_cls
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Body, FastAPI, Query, Request, Response
@@ -314,8 +314,8 @@ def _resolve_booking_addons(
             raise api_validation.UnknownAddon(
                 f"addon_id={addon_id} has no price for category={category}"
             )
-        addon_price = round(base_price * 0.9)
-        label = f"{catalog.service_name(addon_id)} — {addon_price} DH (-10%)"
+        addon_price = round(base_price * 0.8)
+        label = f"{catalog.service_name(addon_id)} — {addon_price} DH (-20%)"
         resolved.append((addon_id, label, addon_price, base_price))
     return resolved
 
@@ -560,7 +560,11 @@ async def create_booking(
             body.location.center_id,
             location_kind=body.location.kind,
         )
-        api_validation.validate_slot_and_date(body.date, body.slot)
+        api_validation.validate_slot_and_date(
+            body.date,
+            body.slot,
+            location_kind=body.location.kind,
+        )
 
         promo_code = catalog.normalize_promo_code(body.promo_code) if body.promo_code else None
         promo_label = catalog.promo_label(promo_code) if promo_code else ""
@@ -631,7 +635,7 @@ async def create_booking(
                     addon_service_label=addon_label,
                     addon_price_dh=addon_price,
                     regular_price_dh=addon_regular_price,
-                    discount_label="-10% Esthétique",
+                    discount_label="-20% Esthétique",
                     denormalize_to_legacy=index == 0,
                     session=session,
                 )
@@ -809,12 +813,14 @@ def _slots_with_lead_filter(
     *,
     date_iso: str | None,
     now: datetime | None = None,
+    location_kind: str | None = "center",
 ) -> tuple[list[TimeSlotOut], datetime | None, int]:
     """Return (payload, cutoff, total_count).
 
     When `date_iso` is None: return every active slot, no filtering.
-    When supplied: filter to slots whose start time is >= now + 2h in
-    Africa/Casablanca. `now` is injectable for tests.
+    When supplied: filter to slots whose start time is >= the server-side lead
+    cutoff for the requested location kind in Africa/Casablanca. `now` is
+    injectable for tests.
     """
     all_slots = catalog.active_time_slots()
     if date_iso is None:
@@ -833,7 +839,10 @@ def _slots_with_lead_filter(
         now_tz = datetime.now(tz=api_validation.CASABLANCA_TZ)
     else:
         now_tz = now.astimezone(api_validation.CASABLANCA_TZ)
-    cutoff = now_tz + timedelta(hours=api_validation.MIN_LEAD_HOURS)
+    cutoff = api_validation.minimum_slot_start(
+        now=now_tz,
+        location_kind=location_kind,
+    )
 
     available: list[TimeSlotOut] = []
     for slot_id, label, period in all_slots:
@@ -867,19 +876,21 @@ async def list_catalog_time_slots(
     request: Request,
     response: Response,
     date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    location: Literal["home", "center"] = Query("center"),
 ) -> list[TimeSlotOut]:
     """Slot rows for the booking flow. Optional `date=YYYY-MM-DD` filters out
-    slots starting <2h after server-side `now` in Africa/Casablanca.
+    slots before the server-side lead cutoff for the selected location.
 
-    The PWA's client-side 2-hour filter is decorative — a user with a
-    tampered clock or wrong timezone could otherwise submit a slot in the
-    past. This endpoint is the authoritative source.
+    The PWA's client-side filter is decorative — a user with a tampered clock or
+    wrong timezone could otherwise submit a slot too soon. This endpoint is the
+    authoritative source for display-time filtering.
     """
     del request, response
-    available, cutoff, total = _slots_with_lead_filter(date_iso=date)
+    available, cutoff, total = _slots_with_lead_filter(date_iso=date, location_kind=location)
     logger.info(
-        "catalog.time_slots listed date=%s total=%d returned=%d cutoff=%s",
+        "catalog.time_slots listed date=%s location=%s total=%d returned=%d cutoff=%s",
         date or "-",
+        location,
         total,
         len(available),
         cutoff.isoformat() if cutoff else "-",

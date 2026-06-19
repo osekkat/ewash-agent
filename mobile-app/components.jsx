@@ -48,9 +48,8 @@ function _helpMessage(t, currentScreen) {
   return template.replace('{screen}', currentScreen || 'app');
 }
 
-function _helpPhoneDigits(staffContact) {
-  const raw = (staffContact && staffContact.whatsapp_phone) || EWASH_OFFICIAL_WHATSAPP;
-  return String(raw || '').replace(/[^0-9]/g, '');
+function _helpPhoneDigits(_staffContact) {
+  return String(EWASH_OFFICIAL_WHATSAPP || '').replace(/[^0-9]/g, '');
 }
 
 function _canOpenHelp(staffContact) {
@@ -59,7 +58,7 @@ function _canOpenHelp(staffContact) {
 
 function _openHelp(staffContact, currentScreen, t) {
   if (!_canOpenHelp(staffContact)) return;
-  if (window.EwashLog) window.EwashLog.info('help.opened', { from_screen: currentScreen || 'app' });
+  if (window.EwashLog) window.EwashLog.info('help.opened', { from_screen: currentScreen || 'app', phone: 'official' });
   const phone = _helpPhoneDigits(staffContact);
   const url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(_helpMessage(t, currentScreen));
   window.open(url, '_blank', 'noopener,noreferrer');

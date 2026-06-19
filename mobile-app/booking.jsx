@@ -10,6 +10,15 @@ const MOTO_CATEGORY = 'MOTO';
 const DEFAULT_STAFF_CONTACT = { available: true, whatsapp_phone: (window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502')) };
 const FALLBACK_STAFF_WHATSAPP = window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502');
 const BOOKING_DRAFT_STORAGE_KEY = 'ewash.booking_draft';
+const BOOKING_SERVICE_DURATION_MINUTES = {
+  svc_ext: 30,
+  svc_cpl: 60,
+  svc_sal: 120,
+};
+const BOOKING_CENTER_LEAD_MINUTES = 120;
+const BOOKING_HOME_LEAD_WORKING_MINUTES = 240;
+const BOOKING_WORKDAY_START_MINUTES = 9 * 60;
+const BOOKING_WORKDAY_END_MINUTES = 22 * 60;
 
 const BOOKING_DRAFT_MAX_AGE_MS = 60 * 60 * 1000;
 const BOOKING_DRAFT_SCHEMA_VERSION = 1;
@@ -45,8 +54,114 @@ function _categorySub(t, category) {
 function _normalizeService(service) {
   if (!service) return null;
   return Object.assign({}, service, {
-    durationMin: service.duration_min || service.durationMin || 45,
+    durationMin: BOOKING_SERVICE_DURATION_MINUTES[service.id] || service.duration_min || service.durationMin || 45,
   });
+}
+
+function _durationLabel(t, minutes) {
+  if (minutes >= 60 && minutes % 60 === 0) {
+    return (t.fromDuration || 'À partir de {duration}').replace('{duration}', (minutes / 60) + 'h');
+  }
+  return (t.fromDuration || 'À partir de {duration}').replace('{duration}', minutes + ' ' + (t.min || 'min'));
+}
+
+function _localDateIsoFromDate(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function _minutesIntoDay(date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function _dateAtMinutes(date, minutes) {
+  const out = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  out.setMinutes(minutes);
+  return out;
+}
+
+function _candidateStartForSlot(date, slot) {
+  if (!date || !slot) return null;
+  const start = _slotStartMinutes(slot);
+  return new Date(date.y, date.m, date.d, Math.floor(start / 60), start % 60, 0, 0);
+}
+
+function _homeLeadCutoff(now, closedDatesSet) {
+  const closed = closedDatesSet || new Set();
+  let cursor = new Date(now.getTime());
+  let remaining = BOOKING_HOME_LEAD_WORKING_MINUTES;
+  let guard = 0;
+  while (remaining > 0 && guard < 370) {
+    const iso = _localDateIsoFromDate(cursor);
+    let minute = _minutesIntoDay(cursor);
+    if (closed.has(iso) || minute >= BOOKING_WORKDAY_END_MINUTES) {
+      cursor = _dateAtMinutes(cursor, BOOKING_WORKDAY_START_MINUTES);
+      cursor.setDate(cursor.getDate() + 1);
+      guard += 1;
+      continue;
+    }
+    if (minute < BOOKING_WORKDAY_START_MINUTES) {
+      cursor = _dateAtMinutes(cursor, BOOKING_WORKDAY_START_MINUTES);
+      minute = BOOKING_WORKDAY_START_MINUTES;
+    }
+    const available = BOOKING_WORKDAY_END_MINUTES - minute;
+    if (available >= remaining) {
+      return new Date(cursor.getTime() + remaining * 60 * 1000);
+    }
+    remaining -= available;
+    cursor = _dateAtMinutes(cursor, BOOKING_WORKDAY_START_MINUTES);
+    cursor.setDate(cursor.getDate() + 1);
+    guard += 1;
+  }
+  return new Date(now.getTime() + BOOKING_HOME_LEAD_WORKING_MINUTES * 60 * 1000);
+}
+
+function _slotLeadCutoff(data, closedDatesSet) {
+  const now = new Date();
+  if (data && data.locationKind === 'home') return _homeLeadCutoff(now, closedDatesSet);
+  return new Date(now.getTime() + BOOKING_CENTER_LEAD_MINUTES * 60 * 1000);
+}
+
+function _readBookingProfileVehicles() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const parsed = JSON.parse(localStorage.getItem('ewash.profile_vehicles') || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((row) => ({
+      category: row.category || 'A',
+      category_label: row.category || 'A',
+      make: row.make || '',
+      color: row.color || '',
+      plate: row.plate || '',
+      label: [row.make, row.color].filter(Boolean).join(' · '),
+      last_used_at: null,
+    })).filter((row) => row.make || row.color || row.category);
+  } catch (_) {
+    return [];
+  }
+}
+
+function _mergeVehicleHistory(localRows, apiRows) {
+  const seen = new Set();
+  return (localRows || []).concat(apiRows || []).filter((row) => {
+    const key = [row.category, row.make, row.color].join('|').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function _readBookingProfileAddresses() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const parsed = JSON.parse(localStorage.getItem('ewash.profile_addresses') || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
 }
 
 function _servicesForCategory(bootstrap, category) {
@@ -85,7 +200,7 @@ function _slotLabel(slots, slotId) {
 
 function _addonPreviewPrice(addon) {
   if (!addon) return 0;
-  return Math.round((addon.price_dh || 0) * 0.9);
+  return Math.round((addon.price_dh || 0) * 0.8);
 }
 
 function _uuid() {
@@ -129,20 +244,22 @@ function _prefillAddons(prefill) {
 }
 
 function _initialBookingData(profile, prefill) {
+  const prefillService = prefill && prefill.service ? prefill.service
+    : prefill && prefill.serviceId ? { id: prefill.serviceId } : null;
   return {
     name: (profile && profile.name) || '',
     // Pre-fill from the stored profile for returning users. New (anonymous)
     // users get a blank field and type their phone in the recap step.
     phone: (profile && profile.phone) || '',
-    category: null, // 'A' | 'B' | 'C' | 'MOTO'
-    make: '', color: '', plate: '',
+    category: (prefill && prefill.category) || null, // 'A' | 'B' | 'C' | 'MOTO'
+    make: (prefill && prefill.make) || '', color: (prefill && prefill.color) || '', plate: (prefill && prefill.plate) || '',
     locationKind: null, // 'home' | 'center'
     pinAddress: '',
     addressDetails: '',
     centerId: null,
     promoCode: null,
     promoApplied: false,
-    service: null,
+    service: prefillService,
     date: null, // { d, m, y, label }
     time: null,
     note: '',
@@ -357,9 +474,8 @@ function _toastForError(t, code) {
   return map[code] || t.submitErrorRetry || t.submitBookingError || t.errorGeneric;
 }
 
-function _staffWhatsappDigits(staffContact) {
-  const raw = (staffContact && staffContact.whatsapp_phone) || FALLBACK_STAFF_WHATSAPP;
-  return String(raw).replace(/[^0-9]/g, '');
+function _staffWhatsappDigits(_staffContact) {
+  return String(FALLBACK_STAFF_WHATSAPP).replace(/[^0-9]/g, '');
 }
 
 function _serviceLabelForFallback(data) {
@@ -432,7 +548,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, pr
   const [submitDisabledUntil, setSubmitDisabledUntil] = useS_b(0);
   const [clockTick, setClockTick] = useS_b(Date.now());
   const [isOnline, setIsOnline] = useS_b(_isBrowserOnline());
-  const [vehicleHistory, setVehicleHistory] = useS_b([]);
+  const [vehicleHistory, setVehicleHistory] = useS_b(_readBookingProfileVehicles);
 
   const kind = _isMotoCategory(data.category) ? 'moto' : 'car';
   const stepperSteps = kind === 'moto' ? STEPS_MOTO : STEPS_CAR;
@@ -448,7 +564,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, pr
     [bootstrap]
   );
   const slotsList = bootstrap?.time_slots || [];
-  const staffContact = bootstrap?.staff_contact || appStaffContact || DEFAULT_STAFF_CONTACT;
+  const staffContact = appStaffContact || DEFAULT_STAFF_CONTACT;
   const rateLimitRemaining = Math.max(0, Math.ceil((submitDisabledUntil - clockTick) / 1000));
   const draftAgeMinutes = _draftAgeMinutes(draftAtOpen);
 
@@ -535,7 +651,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, pr
       .then((payload) => {
         if (!alive) return;
         const vehicles = (payload && Array.isArray(payload.vehicles)) ? payload.vehicles : [];
-        setVehicleHistory(vehicles);
+        setVehicleHistory(_mergeVehicleHistory(_readBookingProfileVehicles(), vehicles));
       })
       .catch((err) => {
         if (!alive) return;
@@ -875,6 +991,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, pr
                 category: v.category,
                 make: v.make || '',
                 color: v.color || '',
+                plate: v.plate || '',
                 service: null,
                 addons: data.addons || [],
                 promoCode: null,
@@ -932,6 +1049,7 @@ function BookingFlow({ t, lang, theme, variant, onClose, onComplete, profile, pr
         )}
         {step === 'time' && (
           <TimeStep t={t} data={data} patch={patch} slots={slotsList}
+            closedDatesSet={closedDatesSet}
             onNext={() => goTo('note')}/>
         )}
         {step === 'note' && (
@@ -1372,6 +1490,7 @@ function LocationStep({ t, centers, onHome, onCenter }) {
 // ─────────────────────────────────────────────────────────────
 function AddressPinStep({ t, data, patch, error, onNext }) {
   const hasPinAddress = !!(data.pinAddress || '').trim();
+  const savedAddresses = useM_b(_readBookingProfileAddresses, []);
   const [geoBusy, setGeoBusy] = useS_b(false);
   const [geoErr, setGeoErr] = useS_b('');
   const useMyLocation = () => {
@@ -1448,6 +1567,25 @@ function AddressPinStep({ t, data, patch, error, onNext }) {
                 ? (t.useMyLocationRetry || 'Actualiser ma position')
                 : (t.useMyLocation || 'Utiliser ma position'))}
         </Btn>
+
+        {savedAddresses.length > 0 && (
+          <div className="col gap-8">
+            <div className="t-tiny" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-2)' }}>
+              {t.addresses || 'Mes adresses'}
+            </div>
+            {savedAddresses.map((address, index) => (
+              <button key={address.id || index} type="button" className="card-soft row gap-10"
+                onClick={() => patch({ pinAddress: address.address || address.label || '', addressDetails: address.details || '' })}
+                style={{ padding: 12, borderRadius: 14, textAlign: 'inherit' }}>
+                <Icons.Pin size={18}/>
+                <div className="flex-1 col gap-2" style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700 }}>{address.label || address.address}</div>
+                  {address.address && <div className="t-tiny">{address.address}</div>}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
 
         <Field label={t.yourLocation}>
           <input
@@ -1674,7 +1812,7 @@ function ServiceStep({ t, data, patch, onNext, services, loading }) {
                     <span className="t-tiny" style={{ color: 'var(--text-2)' }}>DH</span>
                   </div>
                   <span className="t-tiny" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Icons.Clock size={11}/> {s.durationMin} {t.min}
+                    <Icons.Clock size={11}/> {_durationLabel(t, s.durationMin)}
                   </span>
                 </div>
               </div>
@@ -1779,17 +1917,14 @@ function DateStep({ t, lang, data, patch, onNext, closedDatesSet }) {
 // ─────────────────────────────────────────────────────────────
 // STEP: Time
 // ─────────────────────────────────────────────────────────────
-function TimeStep({ t, data, patch, onNext, slots }) {
-  // If the chosen date is today, only show slots ≥ now + 2h.
+function TimeStep({ t, data, patch, onNext, slots, closedDatesSet }) {
+  // Home slots require 4 Ewash working hours (09h–22h, closed dates skipped).
+  // Center slots keep the historical 2h wall-clock lead time.
   const groupedSlots = useM_b(() => {
-    const now = new Date();
-    const isToday = data.date &&
-      data.date.d === now.getDate() &&
-      data.date.m === now.getMonth() &&
-      data.date.y === now.getFullYear();
-    const minMinutes = now.getHours() * 60 + now.getMinutes() + 120;
+    const cutoff = _slotLeadCutoff(data, closedDatesSet);
     const keep = (slot) => {
-      return !isToday || _slotStartMinutes(slot) >= minMinutes;
+      const candidate = _candidateStartForSlot(data.date, slot);
+      return candidate && candidate >= cutoff;
     };
     const grouped = { morning: [], afternoon: [], evening: [] };
     (slots || []).filter(keep).forEach((slot) => {
@@ -1799,7 +1934,7 @@ function TimeStep({ t, data, patch, onNext, slots }) {
       else grouped.evening.push(slot);
     });
     return grouped;
-  }, [data.date, slots]);
+  }, [data.date, data.locationKind, slots, closedDatesSet]);
   const empty = !groupedSlots.morning.length && !groupedSlots.afternoon.length && !groupedSlots.evening.length;
   return (
     <>
@@ -2323,7 +2458,7 @@ function ConfirmedStep({ t, lang, data, totalPrice, confirmedRef, confirmedTotal
             <div className="col gap-2 flex-1">
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{data.service?.name}</div>
               <div className="t-muted" style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <Icons.Clock size={12}/> {slotLabel} · {data.service?.durationMin} {t.min}
+                <Icons.Clock size={12}/> {slotLabel} · {_durationLabel(t, data.service?.durationMin || 45)}
               </div>
               <div className="t-muted" style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 5 }}>
                 <Icons.Pin size={12}/> {data.locationKind === 'home' ? data.pinAddress : centerLabel}
@@ -2373,10 +2508,8 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
     }}>
       <div style={{
         width: '100%',
-        background: variant === 'premium'
-          ? 'linear-gradient(135deg, #2a2317 0%, #4a3e22 100%)'
-          : 'linear-gradient(135deg, #84C42B 0%, #5E9412 100%)',
-        color: variant === 'premium' ? '#F5E9CC' : '#0E1A0A',
+        background: 'linear-gradient(135deg, #F8E39B 0%, var(--gold) 48%, #B88916 100%)',
+        color: '#1f1600',
         borderRadius: '28px 28px 0 0',
         padding: '14px 20px 22px',
         position: 'relative',
@@ -2387,7 +2520,7 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
         {/* Grabber */}
         <div style={{
           width: 44, height: 4, borderRadius: 2,
-          background: variant === 'premium' ? 'rgba(245,233,204,0.4)' : 'rgba(14,26,10,0.25)',
+          background: 'rgba(31,22,0,0.22)',
           margin: '0 auto 16px',
         }}/>
 
@@ -2397,8 +2530,8 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
           top: 20, insetInlineEnd: -16,
           width: 108, height: 108,
           borderRadius: '50%',
-          background: variant === 'premium' ? 'var(--gold)' : '#fff',
-          color: variant === 'premium' ? '#0a0a0a' : '#5E9412',
+          background: '#fff7d6',
+          color: '#5a3900',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           transform: 'rotate(10deg)',
           boxShadow: '0 8px 20px rgba(0,0,0,0.22)',
@@ -2408,14 +2541,15 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
           pointerEvents: 'none',
         }}><Icons.Sparkle size={42}/></div>
 
-        <div style={{ maxWidth: 'calc(100% - 90px)', position: 'relative', marginBottom: 14 }}>
-          <div className="t-tiny" style={{
-            fontWeight: 700, letterSpacing: '0.12em',
-            opacity: 0.75, marginBottom: 6,
-          }}>✦ {t.addonOffer.toUpperCase()}</div>
+        <div style={{ maxWidth: 'calc(100% - 86px)', position: 'relative', margin: '0 auto 16px', textAlign: 'center' }}>
           <div style={{
-            fontFamily: 'var(--font-display)', fontWeight: 800,
-            fontSize: 24, lineHeight: 1.1, letterSpacing: '-0.02em',
+            fontFamily: 'var(--font-display)', fontWeight: 900,
+            fontSize: 27, lineHeight: 1.05, letterSpacing: '-0.02em',
+            textTransform: 'uppercase',
+          }}>{t.addonOffer || 'PROMOTION EXCLUSIVE - 20%'}</div>
+          <div style={{
+            fontSize: 14, lineHeight: 1.35, fontWeight: 700,
+            marginTop: 8,
           }}>Ajoutez de l'esthétique à votre lavage</div>
         </div>
 
@@ -2426,7 +2560,7 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
         }}>{t.addonOfferSub}</div>
 
         <div className="col gap-8" style={{
-          background: variant === 'premium' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.28)',
+          background: 'rgba(255,255,255,0.38)',
           borderRadius: 14, padding: '12px 14px', marginBottom: 18,
           position: 'relative',
         }}>
@@ -2455,10 +2589,8 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
                       fontWeight: 800,
                       padding: '2px 7px',
                       borderRadius: 999,
-                      background: variant === 'premium'
-                        ? 'var(--gold)' : '#FFFFFF',
-                      color: variant === 'premium'
-                        ? '#0a0a0a' : '#1A6B0F',
+                      background: '#fff7d6',
+                      color: '#5a3900',
                       letterSpacing: '0.02em',
                     }}>
                       −{savings}
@@ -2474,8 +2606,8 @@ function OfferSheet({ t, variant, addons, onDecline, onAccept }) {
           width: '100%',
           padding: '15px 22px',
           borderRadius: 999,
-          background: variant === 'premium' ? 'var(--gold)' : '#0E1A0A',
-          color: variant === 'premium' ? '#0a0a0a' : '#FFFFFF',
+          background: '#1f1600',
+          color: '#FFFFFF',
           fontWeight: 700, fontSize: 16,
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
           position: 'relative',

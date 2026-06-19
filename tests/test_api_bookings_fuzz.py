@@ -54,7 +54,7 @@ def api_db(monkeypatch, tmp_path):
 
     _pin_validator_now(
         monkeypatch,
-        datetime(2026, 6, 15, 6, 0, tzinfo=api_validation.CASABLANCA_TZ),
+        datetime(2026, 6, 14, 18, 0, tzinfo=api_validation.CASABLANCA_TZ),
     )
 
     async def noop_staff_alert(booking, *, event_label):

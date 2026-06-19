@@ -1,6 +1,6 @@
 """Tests for app.api_validation — the server-side contract validators.
 
-Each test uses a pinned `now` to keep the +2h freshness check deterministic.
+Each test uses a pinned `now` to keep the freshness check deterministic.
 The default closed-date set comes from the static catalog (2026-05-27 and
 2026-05-28 — Eid al-Adha). The default active slots come from `SLOTS` in
 `app/catalog.py`. No database fixture is required: when no engine is configured
@@ -92,6 +92,47 @@ def test_slot_5h_in_future_passes() -> None:
         "2026-06-15",
         "slot_14_16",
         now=datetime(2026, 6, 15, 9, 0, tzinfo=CASABLANCA_TZ),
+    )
+
+
+def test_home_slot_less_than_4_working_hours_rejected() -> None:
+    # Home booking rule: now=10:30, slot_14_16 starts at 14:00 → 3h30 working
+    # lead, which is below the required 4 operational hours.
+    with pytest.raises(SlotTooSoon) as exc_info:
+        validate_slot_and_date(
+            "2026-06-15",
+            "slot_14_16",
+            now=datetime(2026, 6, 15, 10, 30, tzinfo=CASABLANCA_TZ),
+            location_kind="home",
+        )
+    assert exc_info.value.error_code == "slot_too_soon"
+
+
+def test_home_slot_exactly_4_working_hours_passes() -> None:
+    validate_slot_and_date(
+        "2026-06-15",
+        "slot_14_16",
+        now=datetime(2026, 6, 15, 10, 0, tzinfo=CASABLANCA_TZ),
+        location_kind="home",
+    )
+
+
+def test_home_working_hours_skip_after_hours() -> None:
+    # At 21:00, only 1 working hour remains today (until 22:00), so the
+    # 4-working-hour cutoff lands tomorrow at 12:00. The 11h slot is too soon;
+    # the 14h slot is acceptable.
+    with pytest.raises(SlotTooSoon):
+        validate_slot_and_date(
+            "2026-06-16",
+            "slot_11_13",
+            now=datetime(2026, 6, 15, 21, 0, tzinfo=CASABLANCA_TZ),
+            location_kind="home",
+        )
+    validate_slot_and_date(
+        "2026-06-16",
+        "slot_14_16",
+        now=datetime(2026, 6, 15, 21, 0, tzinfo=CASABLANCA_TZ),
+        location_kind="home",
     )
 
 
@@ -303,7 +344,7 @@ def test_addon_id_equal_to_service_id_rejected() -> None:
     # validate_service_for_category) AND SERVICES_DETAILING (so they pass
     # validate_addon_ids). A payload like {service_id: "svc_pol", addon_ids:
     # ["svc_pol"]} would persist two BookingLineItemRow rows — main at full
-    # price plus addon at 10% off — and double-charge the customer for one
+    # price plus addon at 20% off — and double-charge the customer for one
     # service. The validator must reject this before persistence.
     with pytest.raises(DuplicateAddon) as exc_info:
         validate_addon_ids(["svc_pol"], main_service_id="svc_pol")
@@ -519,7 +560,7 @@ def _booking_payload(**overrides) -> dict:
 def _pin_validator_now(monkeypatch, fixed_now: datetime) -> None:
     """Pin ``datetime.now`` inside ``app.api_validation`` to a fixed instant.
 
-    Used by the two slot-freshness boundary tests below. The route calls
+    Used by slot-freshness boundary tests below. The route calls
     ``validate_slot_and_date`` without an explicit ``now=`` so the validator
     reads ``datetime.now(tz=CASABLANCA_TZ)`` — monkeypatching the module-level
     ``datetime`` symbol lets us control that read deterministically without
@@ -583,7 +624,7 @@ def test_http_addon_id_equal_to_service_id_rejected(api_db):
     # passes validate_service_for_category as a main service AND would pass
     # validate_addon_ids as a detailing addon without the equals-main check.
     # Persistence would write two BookingLineItemRow rows (main + addon at
-    # -10%), double-charging the customer. Must surface as a 400 with
+    # -20%), double-charging the customer. Must surface as a 400 with
     # error_code=duplicate_addon mapped to field=addon_ids.
     with _pwa_client() as client:
         response = client.post(
@@ -694,8 +735,8 @@ def test_http_slot_too_soon(api_db, monkeypatch):
 
 
 def test_http_slot_exactly_2h_ahead_accepted(api_db, monkeypatch):
-    # Boundary: now=07:00 CSB and slot_9_11 starts at 09:00 → lead=exactly 2h.
-    # The validator uses strict `<`, so exactly 2h is OK and the booking lands.
+    # Center boundary: now=07:00 CSB and slot_9_11 starts at 09:00 → lead=exactly 2h.
+    # The validator uses strict `<`, so exactly 2h is OK for center bookings.
     _pin_validator_now(
         monkeypatch,
         datetime(2026, 6, 15, 7, 0, tzinfo=CASABLANCA_TZ),
@@ -704,13 +745,51 @@ def test_http_slot_exactly_2h_ahead_accepted(api_db, monkeypatch):
     with _pwa_client() as client:
         response = client.post(
             "/api/v1/bookings",
-            json=_booking_payload(date="2026-06-15", slot="slot_9_11"),
+            json=_booking_payload(
+                date="2026-06-15",
+                slot="slot_9_11",
+                location={"kind": "center", "center_id": "ctr_casa"},
+            ),
         )
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "pending_ewash_confirmation"
     assert body["ref"].startswith("EW-")
+
+
+def test_http_home_slot_under_4_working_hours_rejected(api_db, monkeypatch):
+    # Home boundary: now=10:30 CSB and slot_14_16 starts at 14:00 → 3h30
+    # working lead, below the required 4 operational hours.
+    _pin_validator_now(
+        monkeypatch,
+        datetime(2026, 6, 15, 10, 30, tzinfo=CASABLANCA_TZ),
+    )
+
+    with _pwa_client() as client:
+        response = client.post(
+            "/api/v1/bookings",
+            json=_booking_payload(date="2026-06-15", slot="slot_14_16"),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "slot_too_soon"
+
+
+def test_http_home_slot_exactly_4_working_hours_accepted(api_db, monkeypatch):
+    _pin_validator_now(
+        monkeypatch,
+        datetime(2026, 6, 15, 10, 0, tzinfo=CASABLANCA_TZ),
+    )
+
+    with _pwa_client() as client:
+        response = client.post(
+            "/api/v1/bookings",
+            json=_booking_payload(date="2026-06-15", slot="slot_14_16"),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending_ewash_confirmation"
 
 
 def test_http_oversize_note_rejected(api_db):

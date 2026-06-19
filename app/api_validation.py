@@ -2,8 +2,8 @@
 
 Server-side source of truth for the contract between the PWA and the backend.
 Anything the PWA enforces in the browser must be re-enforced here because a
-tampered client could bypass it. The 2-hour slot-freshness rule and the closed-
-date list both live here, in Africa/Casablanca time.
+tampered client could bypass it. Slot freshness and the closed-date list both
+live here, in Africa/Casablanca time.
 
 Each validator raises an `APIValidationError` subclass with a stable
 `error_code` attribute so the API layer can map exceptions → 400 responses
@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 
 CASABLANCA_TZ = ZoneInfo("Africa/Casablanca")
 MIN_LEAD_HOURS = 2
+HOME_MIN_LEAD_WORKING_HOURS = 4
+WORKING_DAY_START_HOUR = 9
+WORKING_DAY_END_HOUR = 22
 _SLOT_ID_PATTERN = re.compile(r"^slot_(\d+)_(\d+)$")
 _HORIZONTAL_WHITESPACE_RUN = re.compile(r"[ \t]+")
 
@@ -146,17 +149,109 @@ def validate_service_for_category(service_id: str, category: str) -> None:
         )
 
 
+def _to_casablanca(now: datetime) -> datetime:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise TypeError("now must be timezone-aware")
+    return now.astimezone(CASABLANCA_TZ)
+
+
+def _business_lead_cutoff(
+    now_local: datetime,
+    *,
+    working_hours: int,
+    engine: Engine | None = None,
+) -> datetime:
+    """Return ``now_local`` + N operational hours, skipping closed dates.
+
+    Home appointments need four *working* hours of notice. Ewash's customer
+    service window follows the active slot grid (09:00–22:00) and closed dates;
+    hours outside that window do not count toward the lead time.
+    """
+    closed_dates = set(active_closed_dates(engine=engine))
+    cursor = now_local.astimezone(CASABLANCA_TZ)
+    remaining = timedelta(hours=working_hours)
+    guard_days = 0
+
+    while remaining > timedelta(0):
+        current_date = cursor.date()
+        current_iso = current_date.isoformat()
+        day_start = datetime(
+            current_date.year,
+            current_date.month,
+            current_date.day,
+            WORKING_DAY_START_HOUR,
+            0,
+            tzinfo=CASABLANCA_TZ,
+        )
+        day_end = datetime(
+            current_date.year,
+            current_date.month,
+            current_date.day,
+            WORKING_DAY_END_HOUR,
+            0,
+            tzinfo=CASABLANCA_TZ,
+        )
+
+        if current_iso in closed_dates or cursor >= day_end:
+            cursor = day_start + timedelta(days=1)
+            guard_days += 1
+            if guard_days > 370:
+                raise RuntimeError("unable to compute working-hours lead cutoff")
+            continue
+        if cursor < day_start:
+            cursor = day_start
+
+        available = day_end - cursor
+        if available >= remaining:
+            return cursor + remaining
+        remaining -= available
+        cursor = day_start + timedelta(days=1)
+        guard_days += 1
+        if guard_days > 370:
+            raise RuntimeError("unable to compute working-hours lead cutoff")
+
+    return cursor
+
+
+def minimum_slot_start(
+    *,
+    now: datetime | None = None,
+    location_kind: str | None = None,
+    engine: Engine | None = None,
+) -> datetime:
+    """Earliest allowed appointment start for a location kind.
+
+    Center bookings keep the historical 2h wall-clock freshness rule. Home
+    bookings require 4 Ewash working hours (09:00–22:00, skipping closed dates).
+    """
+    if now is None:
+        now_local = datetime.now(tz=CASABLANCA_TZ)
+    else:
+        now_local = _to_casablanca(now)
+
+    if location_kind == "home":
+        return _business_lead_cutoff(
+            now_local,
+            working_hours=HOME_MIN_LEAD_WORKING_HOURS,
+            engine=engine,
+        )
+    return now_local + timedelta(hours=MIN_LEAD_HOURS)
+
+
 def validate_slot_and_date(
     date_iso: str,
     slot_id: str,
     *,
     now: datetime | None = None,
     engine: Engine | None = None,
+    location_kind: str | None = None,
 ) -> None:
-    """Reject closed dates, unknown slots, and slots <2h ahead in Africa/Casablanca.
+    """Reject closed dates, unknown slots, and slots before the allowed cutoff.
 
-    The 2-hour freshness rule is the server-side source of truth — the PWA's
-    client-side `now+2h` filter is decorative and bypassable.
+    Center appointments keep the historical 2-hour wall-clock freshness rule.
+    Home appointments require 4 Ewash working hours (09:00–22:00, skipping
+    closed dates) before the slot start. This is the server-side source of
+    truth — the PWA's client-side filtering is decorative and bypassable.
 
     Parameters
     ----------
@@ -175,12 +270,12 @@ def validate_slot_and_date(
     ClosedDate : if `date_iso` is in the active closed-date set.
     UnknownSlot : if `slot_id` is not an active slot.
     InvalidDate : if `date_iso` cannot be parsed as YYYY-MM-DD.
-    SlotTooSoon : if the slot starts <2h after `now` (Africa/Casablanca).
+    SlotTooSoon : if the slot starts before the computed lead cutoff.
     """
     if now is None:
         now_local = datetime.now(tz=CASABLANCA_TZ)
     else:
-        now_local = now.astimezone(CASABLANCA_TZ)
+        now_local = _to_casablanca(now)
 
     if date_iso in active_closed_dates(engine=engine):
         raise ClosedDate(f"date={date_iso} is in active_closed_dates")
@@ -208,16 +303,22 @@ def validate_slot_and_date(
         tzinfo=CASABLANCA_TZ,
     )
 
-    if candidate < now_local + timedelta(hours=MIN_LEAD_HOURS):
+    cutoff = minimum_slot_start(
+        now=now_local,
+        location_kind=location_kind,
+        engine=engine,
+    )
+    if candidate < cutoff:
         log.info(
-            "slot_too_soon: candidate=%s now=%s lead_hours=%d",
+            "slot_too_soon: candidate=%s now=%s cutoff=%s location_kind=%s",
             candidate.isoformat(),
             now_local.isoformat(),
-            MIN_LEAD_HOURS,
+            cutoff.isoformat(),
+            location_kind or "center",
         )
         raise SlotTooSoon(
             f"slot={slot_id} on date={date_iso} starts {candidate.isoformat()}, "
-            f"less than {MIN_LEAD_HOURS}h after now={now_local.isoformat()}"
+            f"before cutoff={cutoff.isoformat()} for location_kind={location_kind or 'center'}"
         )
 
 
@@ -277,7 +378,7 @@ def validate_addon_ids(addon_ids: list[str], *, main_service_id: str) -> list[st
     ["svc_pol"]}`` would pass both this validator and
     :func:`validate_service_for_category` independently and then persist two
     ``BookingLineItemRow`` rows — one as ``kind=main`` at full price, one as
-    ``kind=addon`` at 10% off — double-charging the customer. Reject early.
+    ``kind=addon`` at 20% off — double-charging the customer. Reject early.
 
     Parameters
     ----------

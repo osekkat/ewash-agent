@@ -211,19 +211,13 @@ function App() {
   }, [isStandalone]);
 
   useE_a(() => {
-    // Lightweight bootstrap-only-for-staff_contact fetch. Booking.jsx fetches
-    // a fuller bootstrap (with services etc.) when the flow opens; here we
-    // only need the staff WhatsApp number for the Bookings detail modal.
-    if (!window.EwashAPI || !window.EwashAPI.getBootstrap) return;
-    let alive = true;
-    window.EwashAPI.getBootstrap({}).then((b) => {
-      if (!alive || !b || !b.staff_contact) return;
-      const phone = b.staff_contact.whatsapp_phone || window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502');
-      setStaffContact({ available: true, whatsapp_phone: phone });
-    }).catch(() => {
-      // Stay on the official WhatsApp fallback.
+    // Keep every customer help/support CTA on the official Ewash WhatsApp Business number.
+    // Backend bootstrap staff_contact may point to an internal/test number, which must
+    // never leak into the customer PWA.
+    setStaffContact({
+      available: true,
+      whatsapp_phone: window.EWASH_OFFICIAL_WHATSAPP || ('+212' + '611204502'),
     });
-    return () => { alive = false; };
   }, []);
 
   // ───── Phase rendering
@@ -243,6 +237,7 @@ function App() {
             staffContact={staffContact}
             openBooking={openBookingModal}
             gotoSupport={openSupportWhatsApp}
+            gotoBookings={() => setTabLogged('bookings')}
             gotoTariffs={() => setTabLogged('services')}/>
         )}
         {!modal && tab === 'bookings' && (
@@ -263,6 +258,7 @@ function App() {
             profile={profile}
             staffContact={staffContact}
             onOpenSupport={openSupportWhatsApp}
+            onProfileChanged={refreshProfile}
             onToast={setToast}
             onLogout={() => { refreshProfile(); setPhaseLogged('lang'); setTabLogged('home'); }}/>
         )}

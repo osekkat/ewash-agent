@@ -636,7 +636,7 @@ def test_create_booking_integrity_error_replays_existing_client_request_id(
 def test_create_booking_single_addon_persists_legacy_and_line_item(api_db):
     addon_id = "svc_cuir"
     addon_regular = catalog.service_price(addon_id, "A", promo_code="YS26")
-    expected_addon_price = round(addon_regular * 0.9)
+    expected_addon_price = round(addon_regular * 0.8)
 
     with _client() as client:
         response = client.post("/api/v1/bookings", json=_payload(addon_ids=[addon_id]))
@@ -649,7 +649,7 @@ def test_create_booking_single_addon_persists_legacy_and_line_item(api_db):
         {
             "kind": "addon",
             "service_id": addon_id,
-            "label": f"{catalog.service_name(addon_id)} — {expected_addon_price} DH (-10%)",
+            "label": f"{catalog.service_name(addon_id)} — {expected_addon_price} DH (-20%)",
             "price_dh": expected_addon_price,
             "regular_price_dh": addon_regular,
             "sort_order": 10,
@@ -671,7 +671,7 @@ def test_create_booking_single_addon_persists_legacy_and_line_item(api_db):
             ("addon", addon_id, expected_addon_price),
         ]
         assert line_items[1].regular_price_dh == addon_regular
-        assert line_items[1].discount_label == "-10% Esthétique"
+        assert line_items[1].discount_label == "-20% Esthétique"
 
 
 def test_create_booking_multiple_addons_appends_all_and_denormalizes_first(
@@ -680,7 +680,7 @@ def test_create_booking_multiple_addons_appends_all_and_denormalizes_first(
 ):
     addon_ids = ["svc_cuir", "svc_plastq", "svc_cer6m"]
     addon_prices = [
-        round(catalog.service_price(addon_id, "A", promo_code="YS26") * 0.9)
+        round(catalog.service_price(addon_id, "A", promo_code="YS26") * 0.8)
         for addon_id in addon_ids
     ]
     caplog.set_level(logging.INFO, logger="ewash.api")

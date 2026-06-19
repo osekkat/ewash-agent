@@ -32,21 +32,139 @@ function _positiveNumber(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+const EWASH_IMPACT_LITERS_PER_WASH = 300;
+const EWASH_IMPACT_DRINKING_MONTHS_PER_WASH = 6;
+const EWASH_DETAILING_SERVICE_IDS = new Set(['svc_pol', 'svc_cer6m', 'svc_cer6w', 'svc_cuir', 'svc_plastq', 'svc_optq', 'svc_lustre']);
+const EWASH_COMPLETED_WASH_STATUSES = new Set(['completed', 'completed_with_issue']);
+const EWASH_PROFILE_VEHICLES_KEY = 'ewash.profile_vehicles';
+const EWASH_PROFILE_ADDRESSES_KEY = 'ewash.profile_addresses';
+const EWASH_NOTIFICATIONS_KEY = 'ewash.notifications_enabled';
+
+function _officialWhatsAppPhone() {
+  return (typeof window !== 'undefined' && window.EWASH_OFFICIAL_WHATSAPP) || ('+212' + '611204502');
+}
+
+function _readLocalArray(key) {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function _writeLocalArray(key, rows) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(key, JSON.stringify(Array.isArray(rows) ? rows : []));
+    }
+  } catch (_) {
+    if (window.EwashLog) window.EwashLog.warn('localstorage.error', { op: 'set', key });
+  }
+}
+
+function _profileStorageKeys() {
+  return {
+    name: (window.EwashAPI && window.EwashAPI._NAME_KEY) || 'ewash.name',
+    phone: (window.EwashAPI && window.EwashAPI._PHONE_KEY) || 'ewash.phone',
+  };
+}
+
+function _normalizeProfilePhone(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (digits.startsWith('212')) digits = digits.slice(3);
+  if (digits.startsWith('0')) digits = digits.slice(1);
+  return digits.slice(0, 9);
+}
+
+function _vehicleDisplayLabel(vehicle) {
+  if (!vehicle) return '';
+  return [vehicle.make, vehicle.color].filter(Boolean).join(' · ') || vehicle.category || '';
+}
+
+function _addressDisplayLabel(address) {
+  if (!address) return '';
+  return address.label || address.address || address.details || '';
+}
+
+function _profileRowId(prefix) {
+  return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(16).slice(2, 6);
+}
+
+function _mergeVehicleRows(localRows, apiRows) {
+  const seen = new Set();
+  return (localRows || []).concat(apiRows || []).filter((row) => {
+    const key = [row.category, row.make, row.color, row.plate].join('|').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function _readImpactStats() {
   const source = typeof window !== 'undefined' ? window.EWASH_IMPACT_STATS : null;
+  const washCount = _positiveNumber(source && source.wash_count) || 0;
+  const litersSaved = _positiveNumber(source && source.liters_saved) || (washCount * EWASH_IMPACT_LITERS_PER_WASH);
+  return { litersSaved, washCount };
+}
+
+function _isCompletedWashBooking(booking) {
+  if (!booking || !EWASH_COMPLETED_WASH_STATUSES.has(booking.status)) return false;
+  const serviceId = booking.service_id || '';
+  return !EWASH_DETAILING_SERVICE_IDS.has(serviceId);
+}
+
+function _impactStatsFromBookings(bookings) {
+  const washCount = (bookings || []).filter(_isCompletedWashBooking).length;
   return {
-    litersSaved: _positiveNumber(source && source.liters_saved),
-    washCount: _positiveNumber(source && source.wash_count),
+    washCount,
+    litersSaved: washCount * EWASH_IMPACT_LITERS_PER_WASH,
   };
+}
+
+function _drinkingWaterLabel(t, washCount) {
+  const months = washCount * EWASH_IMPACT_DRINKING_MONTHS_PER_WASH;
+  if (months <= 0) return t.impactDrinkingEmpty || "0 mois d'eau à boire";
+  if (months < 12) {
+    return (t.impactDrinkingMonths || "{months} mois d'eau à boire").replace('{months}', months);
+  }
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  const yearLabel = years + ' ' + (years > 1 ? (t.years || 'ans') : (t.year || 'an'));
+  if (!rem) return (t.impactDrinkingYears || "{years} d'eau à boire").replace('{years}', yearLabel);
+  return (t.impactDrinkingYearsMonths || "{years} et {months} mois d'eau à boire")
+    .replace('{years}', yearLabel)
+    .replace('{months}', rem);
 }
 
 // ─────────────────────────────────────────────────────────────
 // HOME
 // ─────────────────────────────────────────────────────────────
-function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, variant, profile, staffContact }) {
-  const impactStats = _readImpactStats();
-  const litersCount = useCountUp(impactStats.litersSaved || 0, 1400, !!impactStats.litersSaved);
-  const washCount = useCountUp(impactStats.washCount || 0, 900, !!impactStats.washCount);
+function HomeScreen({ t, lang, openBooking, gotoSupport, gotoBookings, gotoTariffs, theme, variant, profile, staffContact }) {
+  const [impactStats, setImpactStats] = useS_h(_readImpactStats);
+  useE_h(() => {
+    if (!window.EwashAPI || !window.EwashAPI.getMyBookings) return undefined;
+    let alive = true;
+    window.EwashAPI.getMyBookings()
+      .then((resp) => {
+        if (!alive) return;
+        setImpactStats(_impactStatsFromBookings((resp && resp.bookings) || []));
+      })
+      .catch((err) => {
+        if (window.EwashLog && err && err.error_code !== 'no_local_token') {
+          window.EwashLog.warn('home.impact.fetch_failed', { error_code: err.error_code || 'fetch_failed' });
+        }
+      });
+    return function () { alive = false; };
+  }, []);
+  const litersCount = useCountUp(impactStats.litersSaved || 0, 1400, true);
+  const washCount = useCountUp(impactStats.washCount || 0, 900, true);
+  const drinkingLabel = _drinkingWaterLabel(t, impactStats.washCount || 0);
+  const openNotifications = () => {
+    if (window.EwashLog) window.EwashLog.info('home.notifications.opened', {});
+    if (gotoBookings) gotoBookings();
+  };
   return (
     <div className="app-scroll">
       <div className="appbar">
@@ -70,7 +188,7 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
         </div>
         <div className="row gap-4">
           <HelpButton t={t} staffContact={staffContact} currentScreen="home" />
-          <button className="icon-btn" aria-label="notifications">
+          <button className="icon-btn" type="button" aria-label={t.notifications || 'Notifications'} onClick={openNotifications} title={t.notifications || 'Notifications'}>
             <div style={{ position: 'relative' }}>
               <Icons.Bell size={22} />
               <span style={{
@@ -95,17 +213,18 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
             letterSpacing: '-0.02em', maxWidth: 280,
             textAlign: 'center', whiteSpace: 'pre-line',
           }}>
-            {lang === 'ar' ? 'Ewash\nغسيل سيارات بدون ماء' : 'Ewash\nLavage auto sans eau'}
+            {lang === 'ar' ? 'Ewash\nغسيل سيارات\nبدون ماء' : 'Ewash\nLavage auto\nSans eau'}
           </div>
           <button onClick={openBooking}
-            className="press"
+            className="press hero-cta-bounce"
             style={{
               background: variant === 'premium' ? 'var(--gold)' : '#fff',
               color: variant === 'premium' ? '#0a0a0a' : 'var(--primary)',
               border: 'none', borderRadius: 999,
               padding: '14px 24px', fontWeight: 700, fontSize: 15,
               letterSpacing: '-0.01em',
-              display: 'inline-flex', alignItems: 'center', gap: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              width: 'fit-content', margin: '0 auto',
               position: 'relative', zIndex: 1, cursor: 'pointer',
               boxShadow: '0 8px 22px -8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.6)',
             }}>
@@ -114,40 +233,30 @@ function HomeScreen({ t, lang, openBooking, gotoSupport, gotoTariffs, theme, var
           </button>
         </div>
 
-        {/* QUICK STATS */}
-        <div className="row gap-10">
-          <div className="card" style={{ flex: 1, padding: 14, borderRadius: 18 }}>
-            <div className="row gap-6 mb-8">
-              <Icons.Drop size={16} style={{ color: 'var(--primary)' }} />
-              <span className="t-tiny" style={{ color: 'var(--text-2)', fontWeight: 600 }}>
-                {impactStats.litersSaved ? t.waterSaved : (t.waterlessMethod || 'Méthode')}
-              </span>
-            </div>
-            <div className="t-num" style={{ fontWeight: 800, fontSize: impactStats.litersSaved ? 26 : 22, color: 'var(--text)' }}>
-              {impactStats.litersSaved ? (
-                <React.Fragment>
-                  {litersCount.toLocaleString('fr-FR')}<span style={{ fontSize: 14, color: 'var(--text-2)', marginInlineStart: 4 }}>L</span>
-                </React.Fragment>
-              ) : (
-                t.waterlessBadge || 'Sans eau'
-              )}
-            </div>
+        {/* YOUR IMPACT */}
+        <div className="card card-elev" style={{
+          padding: '18px 18px 16px', borderRadius: 22,
+          textAlign: 'center', maxWidth: 360, width: '100%', margin: '0 auto',
+        }}>
+          <div className="row center gap-6 mb-8">
+            <Icons.Drop size={17} style={{ color: 'var(--primary)' }} />
+            <span className="t-tiny" style={{ color: 'var(--text-2)', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+              {t.yourImpact || 'Votre Impact'}
+            </span>
           </div>
-          <div className="card" style={{ flex: 1, padding: 14, borderRadius: 18 }}>
-            <div className="row gap-6 mb-8">
-              <Icons.Sparkle size={16} style={{ color: 'var(--accent)' }} />
-              <span className="t-tiny" style={{ color: 'var(--text-2)', fontWeight: 600 }}>
-                {impactStats.washCount ? (t.washMetric || 'Lavages') : (t.ecoImpact || 'Impact')}
-              </span>
-            </div>
-            <div className="t-num" style={{ fontWeight: 800, fontSize: 26, color: 'var(--text)' }}>
-              {impactStats.washCount ? washCount : '—'}
-            </div>
-            {!impactStats.washCount && (
-              <div className="t-tiny" style={{ color: 'var(--text-3)', fontWeight: 600, marginTop: 2 }}>
-                {t.impactPending || 'Mesure en cours'}
-              </div>
-            )}
+          <div className="t-num" style={{ fontWeight: 850, fontSize: 34, color: 'var(--text)', lineHeight: 1 }}>
+            {litersCount.toLocaleString('fr-FR')}
+            <span style={{ fontSize: 16, color: 'var(--text-2)', marginInlineStart: 4 }}>L</span>
+          </div>
+          <div className="t-muted" style={{ marginTop: 6, fontWeight: 650 }}>
+            {t.waterSaved || "Litres d'eau économisés"}
+          </div>
+          <div className="row center gap-8 mt-12 wrap">
+            <span className="chip chip-primary">{washCount} {t.washMetric || 'lavages'}</span>
+            <span className="chip chip-accent">{drinkingLabel}</span>
+          </div>
+          <div className="t-tiny" style={{ color: 'var(--text-3)', marginTop: 10 }}>
+            {t.impactFormula || "300 L économisés par lavage · 300 L = 6 mois d'eau à boire pour 1 personne"}
           </div>
         </div>
 
@@ -277,10 +386,10 @@ function _openBookingHelp(booking, staffContact, fallback, intent) {
   if (window.EwashLog) {
     window.EwashLog.info('home.next_appointment.' + intent, { ref: booking && booking.ref });
   }
-  const phone = (staffContact && staffContact.whatsapp_phone) || window.EWASH_OFFICIAL_WHATSAPP;
+  const phone = _officialWhatsAppPhone();
   const action = intent === 'edit' ? 'modifier' : 'suivre';
   const text = "Bonjour, je souhaite " + action + " ma réservation Ewash " + ((booking && booking.ref) || '') + ".";
-  const url = phone ? _waLinkFor(phone, text) : ('https://wa.me/?text=' + encodeURIComponent(text));
+  const url = _waLinkFor(phone, text);
   if (url) {
     window.open(url, '_blank');
     return;
@@ -288,19 +397,13 @@ function _openBookingHelp(booking, staffContact, fallback, intent) {
   if (fallback) fallback();
 }
 
-// Home "Parler à l'équipe" tile. Opens the user's WhatsApp with a prefilled
-// message to the staff phone returned from /api/v1/bootstrap. If the bootstrap
-// hasn't populated staffContact yet (shouldn't happen in practice — bootstrap
-// runs at app launch in app.jsx), falls back to the generic wa.me URL that
-// lets the user pick a contact themselves.
-function _openTeamChat(t, staffContact) {
-  if (window.EwashLog) window.EwashLog.info('home.talk_team.opened', {});
-  const phone = (staffContact && staffContact.whatsapp_phone) || window.EWASH_OFFICIAL_WHATSAPP;
+// Home "Parler à l'équipe" tile. Always opens the official Ewash WhatsApp Business number.
+function _openTeamChat(t, _staffContact) {
+  if (window.EwashLog) window.EwashLog.info('home.talk_team.opened', { phone: 'official' });
+  const phone = _officialWhatsAppPhone();
   const text = (t && t.talkTeamMessage) ||
     "Bonjour Ewash, je souhaite discuter avec votre équipe.";
-  const url = phone
-    ? _waLinkFor(phone, text)
-    : ('https://wa.me/?text=' + encodeURIComponent(text));
+  const url = _waLinkFor(phone, text);
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
@@ -521,6 +624,21 @@ function _bookingChipClass(status) {
   return 'chip';
 }
 
+function _isUpcomingBookingForList(booking) {
+  if (!booking) return false;
+  if (_INERT_STATUSES.has(booking.status)) return false;
+  if (!booking.date_iso) return true;
+  return booking.date_iso >= _todayIsoLocal();
+}
+
+function _sortBookingsAsc(a, b) {
+  return _bookingSortValue(a).localeCompare(_bookingSortValue(b));
+}
+
+function _sortBookingsDesc(a, b) {
+  return _bookingSortValue(b).localeCompare(_bookingSortValue(a));
+}
+
 function _waLinkFor(phone, text) {
   const digits = String(phone || '').replace(/[^0-9]/g, '');
   if (!digits) return null;
@@ -581,6 +699,14 @@ function BookingsScreen({ t, lang, openBooking, theme, staffContact }) {
   }, [fetchTick]);
 
   const selected = selectedRef ? bookings.find(function (b) { return b.ref === selectedRef; }) : null;
+  const upcomingBookings = bookings
+    .filter(_isUpcomingBookingForList)
+    .slice()
+    .sort(_sortBookingsAsc);
+  const pastBookings = bookings
+    .filter(function (booking) { return !_isUpcomingBookingForList(booking); })
+    .slice()
+    .sort(_sortBookingsDesc);
 
   return (
     <div className="app-scroll">
@@ -613,15 +739,22 @@ function BookingsScreen({ t, lang, openBooking, theme, staffContact }) {
           <BookingsEmptyCard t={t} onBook={openBooking} />
         )}
 
-        {uiState === 'list' && bookings.map(function (b) {
-          return (
-            <BookingCard
-              key={b.ref}
-              booking={b}
-              onTap={function () { setSelectedRef(b.ref); }}
+        {uiState === 'list' && (
+          <React.Fragment>
+            <BookingListSection
+              title={t.upcoming || 'À venir'}
+              bookings={upcomingBookings}
+              emptyText={t.noUpcomingBookings || 'Aucun rendez-vous à venir'}
+              onTap={function (b) { setSelectedRef(b.ref); }}
             />
-          );
-        })}
+            <BookingListSection
+              title={t.past || 'Passés'}
+              bookings={pastBookings}
+              emptyText={t.noPastBookings || 'Aucun rendez-vous passé'}
+              onTap={function (b) { setSelectedRef(b.ref); }}
+            />
+          </React.Fragment>
+        )}
       </div>
 
       <Sheet open={!!selected} onClose={function () { setSelectedRef(null); }}>
@@ -637,6 +770,30 @@ function BookingsScreen({ t, lang, openBooking, theme, staffContact }) {
         )}
       </Sheet>
     </div>
+  );
+}
+
+function BookingListSection({ title, bookings, emptyText, onTap }) {
+  return (
+    <section className="col gap-10">
+      <div className="row between" style={{ paddingInline: 4 }}>
+        <div className="t-h3">{title}</div>
+        <span className="chip">{bookings.length}</span>
+      </div>
+      {bookings.length ? bookings.map(function (b) {
+        return (
+          <BookingCard
+            key={b.ref}
+            booking={b}
+            onTap={function () { onTap(b); }}
+          />
+        );
+      }) : (
+        <div className="card-soft text-center" style={{ padding: 16, borderRadius: 16 }}>
+          <div className="t-muted">{emptyText}</div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -799,25 +956,21 @@ function BookingDetailContent({ booking, onClose, t, lang, staffContact, openBoo
   const canRebook = _REUSABLE_STATUSES.has(booking.status);
 
   const shareWhatsApp = function () {
-    // Even without a configured staff_contact, the customer can still share a
-    // ready-made message via the WhatsApp app picker — the wa.me URL works
-    // without a target number, falling back to the app's contact picker.
-    const phone = staffContact && staffContact.whatsapp_phone;
+    const phone = _officialWhatsAppPhone();
     const text = "Bonjour, ma réservation Ewash " + booking.ref + " le " + (booking.date_label || '') + " à " + (booking.slot_label || '') + ". Pouvez-vous me donner plus d'infos ?";
-    const url = phone ? _waLinkFor(phone, text) : ('https://wa.me/?text=' + encodeURIComponent(text));
+    const url = _waLinkFor(phone, text);
     if (!url) return;
-    if (window.EwashLog) window.EwashLog.info('bookings.share', { ref: booking.ref, channel: 'whatsapp' });
-    window.open(url, '_blank');
+    if (window.EwashLog) window.EwashLog.info('bookings.share', { ref: booking.ref, channel: 'whatsapp', phone: 'official' });
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const contactSupport = function () {
-    const phone = staffContact && staffContact.whatsapp_phone;
-    if (!phone) return;
+    const phone = _officialWhatsAppPhone();
     const text = "Bonjour, j'ai besoin d'aide concernant ma réservation " + booking.ref + ".";
     const url = _waLinkFor(phone, text);
     if (!url) return;
-    if (window.EwashLog) window.EwashLog.info('bookings.contact_support', { ref: booking.ref });
-    window.open(url, '_blank');
+    if (window.EwashLog) window.EwashLog.info('bookings.contact_support', { ref: booking.ref, phone: 'official' });
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const bookAgain = function () {
@@ -918,6 +1071,48 @@ const TARIFF_BUCKETS = [
   ['lavage', 'wash'],
   ['esthetique', 'detailing'],
 ];
+const SERVICE_DURATION_MINUTES = {
+  svc_ext: 30,
+  svc_cpl: 60,
+  svc_sal: 120,
+};
+const DETAILING_DISCOUNT_RATE = 0.20;
+const DETAILING_SORT_ORDER = {
+  svc_pol: 10,
+  svc_lustre: 20,
+  svc_cer6m: 30,
+  svc_cer6w: 40,
+};
+
+function _serviceDuration(service) {
+  if (!service) return 45;
+  return SERVICE_DURATION_MINUTES[service.id] || service.duration_min || service.durationMin || 45;
+}
+
+function _durationLabel(t, minutes) {
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return (t.fromDuration || 'À partir de {duration}').replace('{duration}', hours + 'h');
+  }
+  return (t.fromDuration || 'À partir de {duration}').replace('{duration}', minutes + ' ' + (t.min || 'min'));
+}
+
+function _displayServiceName(service) {
+  if (!service || !service.id) return service && service.name;
+  if (service.id === 'svc_cer6m') return 'Céramique 6 mois';
+  if (service.id === 'svc_cer6w') return 'Céramique 6 Semaines';
+  return service.name;
+}
+
+function _displayServiceDesc(service) {
+  if (!service || !service.id) return service && service.desc;
+  if (service.id === 'svc_cer6m') return 'Protection céramique 6 mois · polissage nécessaire pour en bénéficier';
+  return service.desc;
+}
+
+function _discountedDetailingPrice(price) {
+  return Math.round((price || 0) * (1 - DETAILING_DISCOUNT_RATE));
+}
 function _mergeTariffCatalog(results) {
   const grouped = {
     lavage: new Map(),
@@ -932,9 +1127,9 @@ function _mergeTariffCatalog(results) {
         if (!row) {
           row = {
             id: service.id,
-            name: service.name,
-            desc: service.desc,
-            durationMin: service.duration_min || service.durationMin || 45,
+            name: _displayServiceName(service),
+            desc: _displayServiceDesc(service),
+            durationMin: _serviceDuration(service),
             prices: {},
           };
           grouped[screenBucket].set(service.id, row);
@@ -943,9 +1138,12 @@ function _mergeTariffCatalog(results) {
       });
     });
   });
+  const detailingRows = Array.from(grouped.esthetique.values()).sort(function (a, b) {
+    return (DETAILING_SORT_ORDER[a.id] || 999) - (DETAILING_SORT_ORDER[b.id] || 999);
+  });
   return {
     lavage: Array.from(grouped.lavage.values()),
-    esthetique: Array.from(grouped.esthetique.values()),
+    esthetique: detailingRows,
   };
 }
 
@@ -959,6 +1157,29 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
   });
   const [reloadTick, setReloadTick] = useS_h(0);
   const [selectedDetailingIds, setSelectedDetailingIds] = useS_h([]);
+  const [selectedCategory, setSelectedCategory] = useS_h('A');
+  const [tariffVehicles, setTariffVehicles] = useS_h(() => _readLocalArray(EWASH_PROFILE_VEHICLES_KEY));
+
+  useE_h(() => {
+    if (!window.EwashAPI || !window.EwashAPI.getMyVehicles) return undefined;
+    let alive = true;
+    window.EwashAPI.getMyVehicles()
+      .then((payload) => {
+        if (!alive) return;
+        const apiVehicles = (payload && Array.isArray(payload.vehicles)) ? payload.vehicles : [];
+        const vehicles = _mergeVehicleRows(_readLocalArray(EWASH_PROFILE_VEHICLES_KEY), apiVehicles);
+        setTariffVehicles(vehicles);
+        if (vehicles[0] && vehicles[0].category && TARIFF_CATEGORIES.includes(vehicles[0].category)) {
+          setSelectedCategory(vehicles[0].category);
+        }
+      })
+      .catch((err) => {
+        if (window.EwashLog && err && err.error_code !== 'no_local_token') {
+          window.EwashLog.warn('tariffs.vehicles.fetch_failed', { error_code: err.error_code || 'fetch_failed' });
+        }
+      });
+    return function () { alive = false; };
+  }, []);
 
   useE_h(() => {
     let alive = true;
@@ -1016,7 +1237,7 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
   const isDetailingTab = tab === 'esthetique';
   const items = tab === 'lavage' ? catalogState.lavage : catalogState.esthetique;
   const selectedDetailingItems = catalogState.esthetique.filter((item) => selectedDetailingIds.includes(item.id));
-  const selectedDetailingTotal = selectedDetailingItems.reduce((sum, item) => sum + (item.prices.A || 0), 0);
+  const selectedDetailingTotal = selectedDetailingItems.reduce((sum, item) => sum + _discountedDetailingPrice(item.prices[selectedCategory] || item.prices.A || 0), 0);
   const toggleDetailingService = (id) => {
     setSelectedDetailingIds((prev) => prev.includes(id)
       ? prev.filter((itemId) => itemId !== id)
@@ -1024,7 +1245,16 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
   };
   const startDetailingBooking = () => {
     if (!selectedDetailingIds.length) return;
-    openBooking({ addons: selectedDetailingIds, source: 'services_detailing' });
+    const [serviceId, ...addonIds] = selectedDetailingIds;
+    openBooking({
+      category: selectedCategory,
+      serviceId,
+      addons: addonIds,
+      source: 'services_detailing',
+    });
+  };
+  const startWashBooking = (service) => {
+    openBooking({ category: selectedCategory, serviceId: service.id, source: 'services_wash' });
   };
   return (
     <div className="app-scroll">
@@ -1032,14 +1262,14 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
       <div className="px-16 col gap-16 anim-stagger" style={{ paddingBottom: 24 }}>
         <div className="row" style={{ background: 'var(--surface-2)', borderRadius: 999, padding: 4 }}>
           {['lavage', 'esthetique'].map(k => (
-            <button key={k} onClick={() => setTab(k)} style={{
+            <button key={k} onClick={() => setTab(k)} className={k === 'esthetique' && tab !== k ? 'gold-tab-pulse' : ''} style={{
               flex: 1, padding: '11px 16px', borderRadius: 999,
               background: tab === k
                 ? (k === 'esthetique' ? 'linear-gradient(135deg, var(--sun), var(--gold))' : 'var(--surface)')
-                : 'transparent',
+                : (k === 'esthetique' ? 'linear-gradient(135deg, color-mix(in srgb, var(--sun) 36%, transparent), color-mix(in srgb, var(--gold) 30%, transparent))' : 'transparent'),
               color: tab === k
                 ? (k === 'esthetique' ? '#19201a' : 'var(--text)')
-                : 'var(--text-2)',
+                : (k === 'esthetique' ? 'var(--gold-deep)' : 'var(--text-2)'),
               fontWeight: tab === k ? 700 : 600, fontSize: 13.5,
               letterSpacing: '-0.005em',
               boxShadow: tab === k
@@ -1050,14 +1280,54 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
           ))}
         </div>
 
-        <div className="card-soft" style={{
-          padding: 14, borderRadius: 18,
-          display: 'flex', gap: 10, alignItems: 'center',
-        }}>
-          <Icons.Leaf size={20} style={{ color: 'var(--accent)' }} />
-          <div className="t-muted" style={{ flex: 1, fontSize: 12.5 }}>
-            <strong style={{ color: 'var(--text)' }}>{t.ecoTag}</strong><br/>
-            A : Citadine · B : Petite berline / SUV · C : Grande berline / SUV
+        <div className="card-soft" style={{ padding: 14, borderRadius: 18 }}>
+          <div className="row gap-10 mb-10" style={{ alignItems: 'flex-start' }}>
+            <Icons.Leaf size={20} style={{ color: 'var(--accent)', marginTop: 1 }} />
+            <div className="t-muted" style={{ flex: 1, fontSize: 12.5 }}>
+              <strong style={{ color: 'var(--text)' }}>{t.vehicleTariffSelector || 'Tarif selon votre véhicule'}</strong><br/>
+              {t.vehicleTariffSelectorSub || 'Sélectionnez un véhicule enregistré ou une catégorie pour voir directement le bon prix.'}
+            </div>
+          </div>
+          {tariffVehicles.length > 0 && (
+            <div className="row wrap gap-8 mb-10">
+              {tariffVehicles.map((v, i) => {
+                const selectedVehicle = selectedCategory === v.category;
+                return (
+                  <button key={'vehicle-' + i} type="button" className="chip"
+                    onClick={() => setSelectedCategory(v.category)}
+                    style={{
+                      cursor: 'pointer', padding: '8px 11px',
+                      borderColor: selectedVehicle ? 'var(--primary)' : 'var(--border)',
+                      background: selectedVehicle ? 'var(--primary-soft)' : 'var(--chip-bg)',
+                      color: selectedVehicle ? 'var(--primary-soft-text)' : 'var(--text-2)',
+                      fontWeight: selectedVehicle ? 800 : 650,
+                    }}>
+                    {v.label || [v.make, v.color].filter(Boolean).join(' · ') || (v.category_label || v.category)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="row gap-8">
+            {TARIFF_CATEGORIES.map((category) => {
+              const selected = selectedCategory === category;
+              return (
+                <button key={category} type="button" onClick={() => setSelectedCategory(category)}
+                  style={{
+                    flex: 1, padding: '10px 8px', borderRadius: 12,
+                    background: selected ? 'var(--primary)' : 'var(--surface)',
+                    color: selected ? 'var(--primary-text)' : 'var(--text)',
+                    border: `1px solid ${selected ? 'var(--primary)' : 'var(--border)'}`,
+                    fontWeight: 800, textAlign: 'center',
+                    boxShadow: selected ? '0 8px 18px -10px color-mix(in srgb, var(--primary) 55%, transparent)' : 'none',
+                  }}>
+                  <div>{category}</div>
+                  <div className="t-tiny" style={{ color: selected ? 'rgba(255,255,255,0.78)' : 'var(--text-3)' }}>
+                    {category === 'A' ? 'Citadine' : category === 'B' ? 'Berline/SUV' : 'Grand SUV'}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1098,9 +1368,9 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
         )}
 
         {items.map((s, i) => {
-          const categoryPrices = TARIFF_CATEGORIES.map(c => s.prices[c]);
-          const flat = categoryPrices.every(price => price === categoryPrices[0]);
           const selected = isDetailingTab && selectedDetailingIds.includes(s.id);
+          const rawPrice = s.prices[selectedCategory] || s.prices.A || 0;
+          const displayPrice = isDetailingTab ? _discountedDetailingPrice(rawPrice) : rawPrice;
           return (
             <div
               key={i}
@@ -1147,41 +1417,29 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
                 )}
               </div>
               <div className="row gap-6 mb-12">
-                <span className="chip"><Icons.Clock size={12}/> {s.durationMin} {t.min}</span>
+                <span className="chip"><Icons.Clock size={12}/> {_durationLabel(t, s.durationMin)}</span>
+                {isDetailingTab && <span className="chip chip-accent">{t.discount20 || '-20%'}</span>}
               </div>
-              {flat ? (
-                <div style={{
-                  background: 'var(--surface-2)',
-                  borderRadius: 12, padding: '12px 14px',
-                  display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4)',
-                }}>
-                  <span className="t-tiny" style={{ letterSpacing: '0.1em', fontWeight: 700, color: 'var(--text-2)' }}>
-                    TOUTES CATÉGORIES
-                  </span>
+              <div style={{
+                background: 'var(--surface-2)',
+                borderRadius: 12, padding: '12px 14px',
+                display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4)',
+              }}>
+                <span className="t-tiny" style={{ letterSpacing: '0.1em', fontWeight: 700, color: 'var(--text-2)' }}>
+                  {t.category || 'Catégorie'} {selectedCategory}
+                </span>
+                <span className="row gap-6" style={{ alignItems: 'baseline' }}>
+                  {isDetailingTab && rawPrice > displayPrice && (
+                    <span style={{ fontSize: 12, color: 'var(--text-3)', textDecoration: 'line-through', fontWeight: 700 }}>{rawPrice}</span>
+                  )}
                   <span className="t-num" style={{ fontWeight: 800, fontSize: 22, color: isDetailingTab ? 'var(--gold-deep)' : 'var(--text)', letterSpacing: '-0.02em' }}>
-                    {s.prices.A}<span style={{ fontSize: 12, color: 'var(--text-2)', marginInlineStart: 4 }}>DH</span>
+                    {displayPrice}<span style={{ fontSize: 12, color: 'var(--text-2)', marginInlineStart: 4 }}>DH</span>
                   </span>
-                </div>
-              ) : (
-                <div className="row gap-8">
-                  {TARIFF_CATEGORIES.map(c => (
-                    <div key={c} className="flex-1" style={{
-                      background: 'var(--surface-2)',
-                      borderRadius: 12, padding: '10px 8px',
-                      textAlign: 'center',
-                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4)',
-                    }}>
-                      <div className="t-tiny" style={{ letterSpacing: '0.12em', fontWeight: 800, color: 'var(--text-3)' }}>{c}</div>
-                      <div className="t-num" style={{ fontWeight: 800, fontSize: 17, color: isDetailingTab ? 'var(--gold-deep)' : 'var(--text)', marginTop: 2, letterSpacing: '-0.015em' }}>
-                        {s.prices[c]}<span style={{ fontSize: 10, color: 'var(--text-2)', marginInlineStart: 2 }}>DH</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                </span>
+              </div>
               {!isDetailingTab && (
-                <Btn variant="soft" block style={{ marginTop: 12 }} onClick={openBooking}>
+                <Btn variant="soft" block style={{ marginTop: 12 }} onClick={() => startWashBooking(s)}>
                   {t.bookCta}
                 </Btn>
               )}
@@ -1207,6 +1465,7 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
                 opacity: selectedDetailingIds.length ? 1 : 0.45,
                 background: selectedDetailingIds.length ? 'linear-gradient(135deg, var(--sun), var(--gold))' : undefined,
                 color: selectedDetailingIds.length ? '#19201a' : undefined,
+                animation: selectedDetailingIds.length ? 'heroCtaBounce 1.8s ease-in-out infinite' : undefined,
               }}>
               {selectedDetailingIds.length > 0
                 ? ((t.bookSelectedDetailing || 'Prendre RDV avec {count} prestations').replace('{count}', selectedDetailingIds.length))
@@ -1243,14 +1502,50 @@ function _clearLocalAuthState() {
   });
 }
 
-function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant, profile, staffContact, onOpenSupport, onToast, onLogout }) {
+function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant, profile, staffContact, onOpenSupport, onProfileChanged, onToast, onLogout }) {
   const [confirmingAllOut, setConfirmingAllOut] = useS_h(false);
   const [confirmingDelete, setConfirmingDelete] = useS_h(false);
+  const [editingProfile, setEditingProfile] = useS_h(false);
+  const [editingVehicles, setEditingVehicles] = useS_h(false);
+  const [editingAddresses, setEditingAddresses] = useS_h(false);
   const [logoutBusy, setLogoutBusy] = useS_h(null);
   const [deleteBusy, setDeleteBusy] = useS_h(false);
   const [deleteError, setDeleteError] = useS_h('');
+  const [savedVehicles, setSavedVehicles] = useS_h(() => _readLocalArray(EWASH_PROFILE_VEHICLES_KEY));
+  const [savedAddresses, setSavedAddresses] = useS_h(() => _readLocalArray(EWASH_PROFILE_ADDRESSES_KEY));
+  const [notificationsOn, setNotificationsOn] = useS_h(() => {
+    try { return localStorage.getItem(EWASH_NOTIFICATIONS_KEY) !== 'false'; }
+    catch (_) { return true; }
+  });
   const impactStats = _readImpactStats();
   const profileLitersCount = useCountUp(impactStats.litersSaved || 0, 1200, !!impactStats.litersSaved);
+
+  const persistVehicles = (rows) => {
+    setSavedVehicles(rows);
+    _writeLocalArray(EWASH_PROFILE_VEHICLES_KEY, rows);
+  };
+  const persistAddresses = (rows) => {
+    setSavedAddresses(rows);
+    _writeLocalArray(EWASH_PROFILE_ADDRESSES_KEY, rows);
+  };
+  const saveProfileInfo = (form) => {
+    const keys = _profileStorageKeys();
+    try {
+      localStorage.setItem(keys.name, String(form.name || '').trim());
+      localStorage.setItem(keys.phone, _normalizeProfilePhone(form.phone));
+    } catch (_) {
+      if (window.EwashLog) window.EwashLog.warn('localstorage.error', { op: 'set', key: 'profile' });
+    }
+    if (window.EwashLog) window.EwashLog.info('profile.saved', {});
+    if (onProfileChanged) onProfileChanged();
+    if (onToast) onToast(t.profileSaved || 'Profil enregistré');
+    setEditingProfile(false);
+  };
+  const toggleNotifications = (next) => {
+    setNotificationsOn(next);
+    try { localStorage.setItem(EWASH_NOTIFICATIONS_KEY, next ? 'true' : 'false'); } catch (_) {}
+    if (onToast) onToast(next ? (t.notificationsEnabled || 'Notifications activées') : (t.notificationsDisabled || 'Notifications désactivées'));
+  };
 
   const doLogout = async (scope) => {
     if (logoutBusy) return;
@@ -1343,9 +1638,9 @@ function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant,
               </div>
             )}
           </div>
-          {profile.name && (
-            <button className="icon-btn"><Icons.Edit size={18}/></button>
-          )}
+          <button className="icon-btn" onClick={() => setEditingProfile(true)} aria-label={t.editProfile || 'Modifier le profil'}>
+            <Icons.Edit size={18}/>
+          </button>
         </div>
 
         {/* Eco impact card */}
@@ -1390,8 +1685,18 @@ function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant,
         </div>
 
         <ProfileSection title={lang === 'ar' ? 'حسابي' : 'Mon compte'}>
-          <ProfileRow icon={<Icons.CarSide size={18}/>} label={t.myVehicles} value="2 véhicules" />
-          <ProfileRow icon={<Icons.Pin size={18}/>} label={t.addresses} value="3" />
+          <ProfileRow
+            icon={<Icons.CarSide size={18}/>}
+            label={t.myVehicles}
+            value={savedVehicles.length ? `${savedVehicles.length} ${savedVehicles.length > 1 ? (t.vehicles || 'véhicules') : (t.vehicle || 'véhicule')}` : (t.add || 'Ajouter')}
+            onClick={() => setEditingVehicles(true)}
+          />
+          <ProfileRow
+            icon={<Icons.Pin size={18}/>}
+            label={t.addresses}
+            value={savedAddresses.length ? String(savedAddresses.length) : (t.add || 'Ajouter')}
+            onClick={() => setEditingAddresses(true)}
+          />
           <ProfileRow icon={<Icons.Wallet size={18}/>} label={t.paymentMethods} value={t.paymentNote} />
         </ProfileSection>
 
@@ -1428,7 +1733,7 @@ function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant,
               </div>
             } />
           <ProfileRow icon={<Icons.Bell size={18}/>} label={t.notifications}
-            right={<ProfileSwitch on={true} />} />
+            right={<ProfileSwitch on={notificationsOn} onChange={toggleNotifications} />} />
         </ProfileSection>
 
         <ProfileSection>
@@ -1493,6 +1798,27 @@ function ProfileScreen({ t, lang, setLang, theme, setTheme, variant, setVariant,
         }}
         onConfirm={doDeleteAccount}
       />
+      <ProfileInfoSheet
+        open={editingProfile}
+        t={t}
+        profile={profile}
+        onCancel={() => setEditingProfile(false)}
+        onSave={saveProfileInfo}
+      />
+      <ProfileVehiclesSheet
+        open={editingVehicles}
+        t={t}
+        vehicles={savedVehicles}
+        onCancel={() => setEditingVehicles(false)}
+        onSave={persistVehicles}
+      />
+      <ProfileAddressesSheet
+        open={editingAddresses}
+        t={t}
+        addresses={savedAddresses}
+        onCancel={() => setEditingAddresses(false)}
+        onSave={persistAddresses}
+      />
     </div>
   );
 }
@@ -1531,6 +1857,188 @@ function ProfileRow({ icon, label, value, right, onClick, danger, disabled }) {
       {value && <div className="t-muted" style={{ fontSize: 13 }}>{value}</div>}
       {right || (onClick && !danger && <Icons.ChevronRight size={16} style={{ color: 'var(--text-3)' }}/>)}
     </button>
+  );
+}
+
+function ProfileInfoSheet({ open, t, profile, onSave, onCancel }) {
+  const [form, setForm] = useS_h({ name: '', phone: '' });
+  useE_h(() => {
+    if (open) setForm({ name: (profile && profile.name) || '', phone: (profile && profile.phone) || '' });
+  }, [open, profile && profile.name, profile && profile.phone]);
+  return (
+    <Sheet open={open} onClose={onCancel}>
+      <div className="col gap-16" style={{ padding: '8px 16px 22px' }}>
+        <div className="col gap-6">
+          <div className="t-h1">{t.editProfile || 'Modifier le profil'}</div>
+          <div className="t-muted">{t.editProfileSub || 'Mettez à jour vos informations personnelles.'}</div>
+        </div>
+        <Field label={t.name || 'Nom'}>
+          <input className="input" value={form.name}
+            onChange={(event) => setForm(Object.assign({}, form, { name: event.target.value }))}
+            placeholder="Omar" />
+        </Field>
+        <Field label={t.phone || 'Téléphone'} hint="Format : +212 6…">
+          <input className="input" inputMode="tel" value={form.phone}
+            onChange={(event) => setForm(Object.assign({}, form, { phone: event.target.value }))}
+            placeholder="611204502" />
+        </Field>
+        <div className="row gap-8">
+          <Btn variant="ghost" style={{ flex: 1 }} onClick={onCancel}>{t.cancel}</Btn>
+          <Btn style={{ flex: 1 }} onClick={() => onSave(form)}>{t.save || 'Enregistrer'}</Btn>
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+function ProfileVehiclesSheet({ open, t, vehicles, onSave, onCancel }) {
+  const emptyForm = { category: 'A', make: '', color: '', plate: '' };
+  const [rows, setRows] = useS_h([]);
+  const [editingId, setEditingId] = useS_h(null);
+  const [form, setForm] = useS_h(emptyForm);
+  useE_h(() => {
+    if (!open) return;
+    setRows((vehicles || []).map((row) => Object.assign({ id: _profileRowId('veh') }, row)));
+    setEditingId(null);
+    setForm(emptyForm);
+  }, [open, vehicles]);
+  const saveCurrent = () => {
+    if (!form.make.trim() && !form.color.trim() && !form.plate.trim()) return;
+    const clean = {
+      id: editingId || _profileRowId('veh'),
+      category: form.category || 'A',
+      make: form.make.trim(),
+      color: form.color.trim(),
+      plate: form.plate.trim(),
+    };
+    setRows((prev) => editingId
+      ? prev.map((row) => row.id === editingId ? clean : row)
+      : prev.concat(clean));
+    setEditingId(null);
+    setForm(emptyForm);
+  };
+  const editRow = (row) => {
+    setEditingId(row.id);
+    setForm({ category: row.category || 'A', make: row.make || '', color: row.color || '', plate: row.plate || '' });
+  };
+  const removeRow = (id) => {
+    setRows((prev) => prev.filter((row) => row.id !== id));
+    if (editingId === id) { setEditingId(null); setForm(emptyForm); }
+  };
+  return (
+    <Sheet open={open} onClose={onCancel}>
+      <div className="col gap-16" style={{ padding: '8px 16px 22px' }}>
+        <div className="col gap-6">
+          <div className="t-h1">{t.myVehicles || 'Mes véhicules'}</div>
+          <div className="t-muted">{t.editVehiclesSub || 'Ajoutez ou modifiez les véhicules à réutiliser en réservation.'}</div>
+        </div>
+        <div className="col gap-8">
+          {rows.length ? rows.map((row) => (
+            <div key={row.id} className="card-soft row gap-10" style={{ padding: 12, borderRadius: 14 }}>
+              <Icons.CarSide size={18} />
+              <div className="flex-1 col gap-2" style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700 }}>{_vehicleDisplayLabel(row)}</div>
+                <div className="t-tiny">{row.category}{row.plate ? ' · ' + row.plate : ''}</div>
+              </div>
+              <button className="chip" onClick={() => editRow(row)}>{t.edit || 'Modifier'}</button>
+              <button className="chip" onClick={() => removeRow(row.id)}>{t.delete || 'Supprimer'}</button>
+            </div>
+          )) : <div className="card-soft text-center t-muted" style={{ padding: 16 }}>{t.noVehicles || 'Aucun véhicule enregistré'}</div>}
+        </div>
+        <div className="card" style={{ padding: 14 }}>
+          <div className="col gap-10">
+            <div className="row gap-8">
+              {['A', 'B', 'C', 'MOTO'].map((category) => (
+                <button key={category} className="chip" onClick={() => setForm(Object.assign({}, form, { category }))}
+                  style={{
+                    borderColor: form.category === category ? 'var(--primary)' : 'var(--border)',
+                    background: form.category === category ? 'var(--primary-soft)' : 'var(--chip-bg)',
+                    color: form.category === category ? 'var(--primary-soft-text)' : 'var(--text-2)',
+                  }}>{category}</button>
+              ))}
+            </div>
+            <input className="input" value={form.make} onChange={(event) => setForm(Object.assign({}, form, { make: event.target.value }))} placeholder={t.makeModelPh || 'Marque / modèle'} />
+            <input className="input" value={form.color} onChange={(event) => setForm(Object.assign({}, form, { color: event.target.value }))} placeholder={t.colorPh || 'Couleur'} />
+            <input className="input" value={form.plate} onChange={(event) => setForm(Object.assign({}, form, { plate: event.target.value }))} placeholder="Plaque (optionnel)" />
+            <Btn variant="soft" onClick={saveCurrent}>{editingId ? (t.update || 'Mettre à jour') : (t.addVehicle || 'Ajouter le véhicule')}</Btn>
+          </div>
+        </div>
+        <div className="row gap-8">
+          <Btn variant="ghost" style={{ flex: 1 }} onClick={onCancel}>{t.cancel}</Btn>
+          <Btn style={{ flex: 1 }} onClick={() => { onSave(rows); onCancel(); }}>{t.save || 'Enregistrer'}</Btn>
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+function ProfileAddressesSheet({ open, t, addresses, onSave, onCancel }) {
+  const emptyForm = { label: '', address: '', details: '' };
+  const [rows, setRows] = useS_h([]);
+  const [editingId, setEditingId] = useS_h(null);
+  const [form, setForm] = useS_h(emptyForm);
+  useE_h(() => {
+    if (!open) return;
+    setRows((addresses || []).map((row) => Object.assign({ id: _profileRowId('addr') }, row)));
+    setEditingId(null);
+    setForm(emptyForm);
+  }, [open, addresses]);
+  const saveCurrent = () => {
+    if (!form.label.trim() && !form.address.trim()) return;
+    const clean = {
+      id: editingId || _profileRowId('addr'),
+      label: form.label.trim(),
+      address: form.address.trim(),
+      details: form.details.trim(),
+    };
+    setRows((prev) => editingId
+      ? prev.map((row) => row.id === editingId ? clean : row)
+      : prev.concat(clean));
+    setEditingId(null);
+    setForm(emptyForm);
+  };
+  const editRow = (row) => {
+    setEditingId(row.id);
+    setForm({ label: row.label || '', address: row.address || '', details: row.details || '' });
+  };
+  const removeRow = (id) => {
+    setRows((prev) => prev.filter((row) => row.id !== id));
+    if (editingId === id) { setEditingId(null); setForm(emptyForm); }
+  };
+  return (
+    <Sheet open={open} onClose={onCancel}>
+      <div className="col gap-16" style={{ padding: '8px 16px 22px' }}>
+        <div className="col gap-6">
+          <div className="t-h1">{t.addresses || 'Mes adresses'}</div>
+          <div className="t-muted">{t.editAddressesSub || 'Ajoutez vos adresses fréquentes pour les prochains rendez-vous à domicile.'}</div>
+        </div>
+        <div className="col gap-8">
+          {rows.length ? rows.map((row) => (
+            <div key={row.id} className="card-soft row gap-10" style={{ padding: 12, borderRadius: 14 }}>
+              <Icons.Pin size={18} />
+              <div className="flex-1 col gap-2" style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700 }}>{_addressDisplayLabel(row)}</div>
+                {row.details && <div className="t-tiny">{row.details}</div>}
+              </div>
+              <button className="chip" onClick={() => editRow(row)}>{t.edit || 'Modifier'}</button>
+              <button className="chip" onClick={() => removeRow(row.id)}>{t.delete || 'Supprimer'}</button>
+            </div>
+          )) : <div className="card-soft text-center t-muted" style={{ padding: 16 }}>{t.noAddresses || 'Aucune adresse enregistrée'}</div>}
+        </div>
+        <div className="card" style={{ padding: 14 }}>
+          <div className="col gap-10">
+            <input className="input" value={form.label} onChange={(event) => setForm(Object.assign({}, form, { label: event.target.value }))} placeholder={t.addressLabelPh || 'Maison, bureau…'} />
+            <input className="input" value={form.address} onChange={(event) => setForm(Object.assign({}, form, { address: event.target.value }))} placeholder={t.addressPh || 'Adresse'} />
+            <textarea className="input" rows={3} value={form.details} onChange={(event) => setForm(Object.assign({}, form, { details: event.target.value }))} placeholder={t.addressDetailsPh || 'Détails d’accès'} />
+            <Btn variant="soft" onClick={saveCurrent}>{editingId ? (t.update || 'Mettre à jour') : (t.addAddress || 'Ajouter l’adresse')}</Btn>
+          </div>
+        </div>
+        <div className="row gap-8">
+          <Btn variant="ghost" style={{ flex: 1 }} onClick={onCancel}>{t.cancel}</Btn>
+          <Btn style={{ flex: 1 }} onClick={() => { onSave(rows); onCancel(); }}>{t.save || 'Enregistrer'}</Btn>
+        </div>
+      </div>
+    </Sheet>
   );
 }
 

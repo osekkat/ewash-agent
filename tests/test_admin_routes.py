@@ -848,7 +848,7 @@ def test_admin_prices_page_renders_public_tariff(monkeypatch):
     assert "Esthétique" in response.text
     assert "L&#x27;Extérieur" in response.text
     assert "Le Complet" in response.text
-    assert "Céramique 6m" in response.text
+    assert "Céramique 6 mois" in response.text
     assert "Scooter" in response.text
     assert "60 DH" in response.text
     assert "125 DH" in response.text

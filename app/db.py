@@ -297,7 +297,7 @@ def _backfill_booking_line_items(engine: Engine) -> None:
                         unit_price_dh=booking.addon_price_dh or 0,
                         regular_price_dh=booking.addon_price_dh or 0,
                         total_price_dh=booking.addon_price_dh or 0,
-                        discount_label="-10%",
+                        discount_label="-20%",
                         sort_order=10,
                     )
                 )

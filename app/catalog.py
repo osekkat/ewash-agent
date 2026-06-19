@@ -77,9 +77,9 @@ SERVICES_WASH = [
 SERVICES_DETAILING = [
     ("svc_pol",      "Le Polissage",        "Rénov. carrosserie + protection hydrophobe 4 sem.",
         {"A": 990, "B": 1070, "C": 1150}),
-    ("svc_cer6m",    "Céramique 6m",        "Protection céramique longue durée (6 mois)",
+    ("svc_cer6m",    "Céramique 6 mois",        "Protection céramique 6 mois (polissage nécessaire)",
         {"A": 800, "B": 800,  "C": 800}),
-    ("svc_cer6w",    "Céramique 6s",        "Protection céramique express (6 semaines)",
+    ("svc_cer6w",    "Céramique 6 Semaines",        "Protection céramique express (6 semaines)",
         {"A": 200, "B": 200,  "C": 200}),
     ("svc_cuir",     "Rénov. Cuir",         "Nettoyage & nourrissage des sièges et garnitures cuir",
         {"A": 250, "B": 250,  "C": 250}),
