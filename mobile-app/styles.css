@@ -40,6 +40,7 @@
   --font-sans: 'Manrope', system-ui, sans-serif;
   --font-display: 'Plus Jakarta Sans', 'Manrope', sans-serif;
   --font-ar: 'Cairo', 'Manrope', system-ui, sans-serif;
+  --bottom-nav-height: 74px;
 }
 
 /* ============ ECO · LIGHT ============ */
@@ -1171,6 +1172,22 @@ button.chip:active { transform: scale(0.95); }
   left: 0;
   right: 0;
 }
+/* Services > Esthétique keeps the app bottom navigation visible. In mobile/
+ * standalone mode both BottomNav and CtaDock can be fixed, so this dock must
+ * sit above the nav instead of being hidden underneath it. */
+@media (display-mode: standalone), (max-width: 600px) {
+  .cta-dock.cta-dock-above-nav {
+    bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+    padding-bottom: 14px;
+  }
+  .app-scroll.services-screen {
+    padding-bottom: calc(230px + env(safe-area-inset-bottom));
+  }
+}
+[data-pwa-standalone] .cta-dock.cta-dock-above-nav {
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  padding-bottom: 14px;
+}
 /* Whichever bottom bar is rendered (BottomNav on tab screens, CtaDock in the
  * booking modal) is position:fixed in standalone mode and overlays the bottom
  * of the viewport. Reserve enough room inside .app-scroll so the last item
@@ -1178,4 +1195,7 @@ button.chip:active { transform: scale(0.95); }
  * BottomNav simply gets some extra breathing room. */
 [data-pwa-standalone] .app-scroll {
   padding-bottom: calc(110px + env(safe-area-inset-bottom));
+}
+[data-pwa-standalone] .app-scroll.services-screen {
+  padding-bottom: calc(230px + env(safe-area-inset-bottom));
 }

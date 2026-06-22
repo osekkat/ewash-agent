@@ -1257,7 +1257,7 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
     openBooking({ category: selectedCategory, serviceId: service.id, source: 'services_wash' });
   };
   return (
-    <div className="app-scroll">
+    <div className="app-scroll services-screen">
       <TopBar title={t.tariffs} t={t} staffContact={staffContact} currentScreen="services" />
       <div className="px-16 col gap-16 anim-stagger" style={{ paddingBottom: 24 }}>
         <div className="row" style={{ background: 'var(--surface-2)', borderRadius: 999, padding: 4 }}>
@@ -1447,7 +1447,7 @@ function ServicesScreen({ t, lang, openBooking, theme, staffContact }) {
           );
         })}
         {isDetailingTab && !catalogState.loading && !catalogState.error && (
-          <CtaDock>
+          <CtaDock className="cta-dock-above-nav">
             <div className="row between mb-8" style={{ paddingInline: 4, gap: 12 }}>
               <div className="col gap-2">
                 <span className="t-muted" style={{ fontSize: 13 }}>{t.selectedServices || 'Prestations sélectionnées'}</span>

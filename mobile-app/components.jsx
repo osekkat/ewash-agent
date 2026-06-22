@@ -166,9 +166,10 @@ function Btn({ variant = 'primary', block, lg, children, icon, ...rest }) {
 // ─────────────────────────────────────────────────────────────
 // Sticky CTA dock at bottom
 // ─────────────────────────────────────────────────────────────
-function CtaDock({ children, hint }) {
+function CtaDock({ children, hint, className = '' }) {
+  const cls = ['cta-dock', className].filter(Boolean).join(' ');
   return (
-    <div className="cta-dock">
+    <div className={cls}>
       {hint && <div className="t-tiny text-center mb-8">{hint}</div>}
       {children}
     </div>
