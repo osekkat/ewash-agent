@@ -55,6 +55,7 @@ _NAV_ITEMS = (
     ("dashboard", "nav.dashboard", "/admin"),
     ("bookings", "nav.bookings", "/admin/bookings"),
     ("customers", "nav.customers", "/admin/customers"),
+    ("b2b", "B2B", "/admin/b2b"),
     ("payroll", "nav.payroll", "/admin/payroll"),
     ("tracking", "nav.tracking", "/admin/tracking"),
     ("cash", "Cash", "/admin/cash"),
@@ -97,6 +98,11 @@ _PAYROLL_RECEIPT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 _PERSONAL_FINANCE_DIR = Path(__file__).resolve().parents[1] / "documents" / "finances_personnelles"
 _PERSONAL_FINANCE_EXTENSIONS = {".xlsx"}
 _PERSONAL_FINANCE_TEXT_PREFIX = "personal_finance_workbook:"
+_B2B_HERTZ_DIR = Path(__file__).resolve().parents[1] / "documents" / "hertz" / "final"
+_B2B_HERTZ_FILE_EXTENSIONS = {".xlsx", ".csv", ".json", ".pdf"}
+_B2B_HERTZ_FILE_TEXT_PREFIX = "b2b_hertz_file:"
+_B2B_HERTZ_PERIOD_TEXT_PREFIX = "b2b_hertz_period:"
+_B2B_HERTZ_CURRENT_PERIOD = "2026-05-21_2026-06-20"
 
 
 def _session_signature(timestamp: str) -> str:
@@ -960,8 +966,203 @@ def _personal_finances_page(*, locale: str) -> HTMLResponse:
     return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/personal-finances"))
 
 
+def _safe_b2b_hertz_filename(filename: str) -> str:
+    safe_name = filename.replace("\\", "/").strip()
+    if "/" in safe_name or safe_name in {"", ".", ".."}:
+        return ""
+    if Path(safe_name).name != safe_name:
+        return ""
+    if Path(safe_name).suffix.lower() not in _B2B_HERTZ_FILE_EXTENSIONS:
+        return ""
+    return safe_name
+
+
+def _json_payload(row: AdminTextRow | None) -> dict[str, object]:
+    if row is None:
+        return {}
+    try:
+        payload = json.loads(row.body or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _b2b_hertz_db_file_records() -> list[dict[str, object]]:
+    engine = _configured_engine()
+    if engine is None:
+        return []
+    with session_scope(engine) as session:
+        rows = session.scalars(
+            select(AdminTextRow)
+            .where(AdminTextRow.text_key.like(f"{_B2B_HERTZ_FILE_TEXT_PREFIX}%"))
+            .order_by(AdminTextRow.text_key.asc())
+        ).all()
+    records: list[dict[str, object]] = []
+    for row in rows:
+        payload = _json_payload(row)
+        fallback_name = row.text_key.removeprefix(_B2B_HERTZ_FILE_TEXT_PREFIX)
+        filename = _safe_b2b_hertz_filename(str(payload.get("filename") or fallback_name))
+        if not filename:
+            continue
+        try:
+            size_bytes = int(str(payload.get("size_bytes") or "0"))
+        except ValueError:
+            size_bytes = 0
+        label = str(payload.get("label") or filename)
+        records.append(
+            {
+                "filename": filename,
+                "label": label,
+                "modified": row.updated_at.strftime("%Y-%m-%d %H:%M") if row.updated_at else "—",
+                "size": _format_file_size(size_bytes) if size_bytes else "—",
+                "href": f"/admin/b2b/hertz/files/{quote(filename, safe='')}",
+            }
+        )
+    return records
+
+
+def _b2b_hertz_filesystem_records() -> list[dict[str, object]]:
+    if not _B2B_HERTZ_DIR.exists():
+        return []
+    records = []
+    for path in sorted(_B2B_HERTZ_DIR.iterdir(), key=lambda item: item.name):
+        if not path.is_file() or path.suffix.lower() not in _B2B_HERTZ_FILE_EXTENSIONS:
+            continue
+        records.append(
+            {
+                "filename": path.name,
+                "label": path.name,
+                "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime)),
+                "size": _format_file_size(path.stat().st_size),
+                "href": f"/admin/b2b/hertz/files/{quote(path.name, safe='')}",
+            }
+        )
+    return records
+
+
+def _b2b_hertz_file_records() -> list[dict[str, object]]:
+    records = _b2b_hertz_db_file_records()
+    seen = {str(record["filename"]) for record in records}
+    for record in _b2b_hertz_filesystem_records():
+        if str(record["filename"]) in seen:
+            continue
+        records.append(record)
+    return records
+
+
+def _b2b_hertz_period_payload(period: str = _B2B_HERTZ_CURRENT_PERIOD) -> dict[str, object]:
+    engine = _configured_engine()
+    if engine is not None:
+        with session_scope(engine) as session:
+            row = session.get(AdminTextRow, f"{_B2B_HERTZ_PERIOD_TEXT_PREFIX}{period}")
+            payload = _json_payload(row)
+        if payload:
+            return payload
+    path = _B2B_HERTZ_DIR / f"hertz_b2b_{period}.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _dh_major(amount: int) -> str:
     return f"{int(amount or 0):,} MAD".replace(",", " ")
+
+
+def _b2b_page(*, locale: str) -> HTMLResponse:
+    title = "B2B"
+    hertz_payload = _b2b_hertz_period_payload()
+    summary = hertz_payload.get("summary") if isinstance(hertz_payload.get("summary"), dict) else {}
+    total = int(summary.get("total_vehicles") or 0) if isinstance(summary, dict) else 0
+    total_ht = int(summary.get("total_ht") or 0) if isinstance(summary, dict) else 0
+    body = f"""
+    <div class="hero"><div><div class="eyebrow">Clients entreprises</div><h1>B2B</h1><p>Suivi des clients B2B eWash : périodes, prestations, fichiers et factures.</p></div></div>
+    <section class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Clients actifs</div><div class="metric-value">1</div></div>
+      <div class="metric-card"><div class="metric-label">Véhicules Hertz période en cours</div><div class="metric-value">{total}</div></div>
+      <div class="metric-card"><div class="metric-label">Total Hertz HT</div><div class="metric-value">{_dh_major(total_ht)}</div></div>
+    </section>
+    <section class="card" style="padding:18px;">
+      <h2>Clients B2B</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:1fr .7fr .7fr .6fr;"><span>Client</span><span>Période</span><span>Suivi</span><span>Action</span></div>
+        <div class="table-row" style="grid-template-columns:1fr .7fr .7fr .6fr;"><span>Hertz</span><span>21/05/2026 → 20/06/2026</span><span>{total} véhicules</span><span><a href="/admin/b2b/hertz">Ouvrir</a></span></div>
+      </div>
+    </section>
+    """
+    return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/b2b"))
+
+
+def _b2b_hertz_page(*, locale: str) -> HTMLResponse:
+    title = "B2B · Hertz"
+    payload = _b2b_hertz_period_payload()
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    raw_rows = payload.get("rows")
+    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    files = _b2b_hertz_file_records()
+    total_vehicles = int(summary.get("total_vehicles") or len(rows)) if isinstance(summary, dict) else len(rows)
+    total_ht = int(summary.get("total_ht") or total_vehicles * 50) if isinstance(summary, dict) else total_vehicles * 50
+    tva = int(summary.get("tva") or total_ht * 0.2) if isinstance(summary, dict) else int(total_ht * 0.2)
+    ttc = int(summary.get("ttc") or total_ht + tva) if isinstance(summary, dict) else total_ht + tva
+    invoice_number = escape(str(summary.get("invoice_number") or "EW-B2B-HERTZ-2026-0001")) if isinstance(summary, dict) else "EW-B2B-HERTZ-2026-0001"
+    by_site = summary.get("by_site") if isinstance(summary.get("by_site"), dict) else {}
+    casa_count = int(by_site.get("Casa Aéroport") or 0) if isinstance(by_site, dict) else 0
+    fes_count = int(by_site.get("Fès Aéroport") or 0) if isinstance(by_site, dict) else 0
+    table_rows = "".join(
+        "<div class='table-row' style='grid-template-columns:.55fr .75fr 1.25fr .8fr .45fr .7fr;'>"
+        f"<span>{escape(str(row.get('date') or ''))}</span>"
+        f"<span>{escape(str(row.get('site') or ''))}</span>"
+        f"<span>{escape(str(row.get('vehicle') or ''))}</span>"
+        f"<span>{escape(str(row.get('matricule') or ''))}</span>"
+        f"<span>{escape(str(row.get('tarif_ht') or 50))}</span>"
+        f"<span>{escape(str(row.get('notes') or ''))}</span>"
+        "</div>"
+        for row in rows[:350]
+        if isinstance(row, dict)
+    ) or "<div class='table-row'><span>Aucune ligne Hertz chargée pour le moment.</span><span></span><span></span><span></span><span></span><span></span></div>"
+    file_rows = "".join(
+        "<div class='table-row' style='grid-template-columns:1.2fr .6fr .5fr .45fr;'>"
+        f"<span>{escape(str(record['label']))}</span>"
+        f"<span>{escape(str(record['modified']))}</span>"
+        f"<span>{escape(str(record['size']))}</span>"
+        f"<span><a href=\"{escape(str(record['href']))}\">Télécharger</a></span>"
+        "</div>"
+        for record in files
+    ) or "<div class='table-row'><span>Aucun fichier disponible.</span><span></span><span></span><span></span></div>"
+    body = f"""
+    <div class="hero"><div><div class="eyebrow">B2B · Hertz</div><h1>Suivi Hertz</h1><p>Consultation du suivi véhicules, fichiers et facture de la période 21/05/2026 → 20/06/2026.</p></div></div>
+    <section class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Total véhicules</div><div class="metric-value">{total_vehicles}</div></div>
+      <div class="metric-card"><div class="metric-label">Casa Aéroport</div><div class="metric-value">{casa_count}</div></div>
+      <div class="metric-card"><div class="metric-label">Fès Aéroport</div><div class="metric-value">{fes_count}</div></div>
+      <div class="metric-card"><div class="metric-label">Total HT</div><div class="metric-value">{_dh_major(total_ht)}</div></div>
+      <div class="metric-card"><div class="metric-label">TVA 20%</div><div class="metric-value">{_dh_major(tva)}</div></div>
+      <div class="metric-card"><div class="metric-label">Total TTC</div><div class="metric-value">{_dh_major(ttc)}</div></div>
+    </section>
+    <section class="card" style="padding:18px; margin-bottom:16px;">
+      <h2>Facturation</h2>
+      <p>Numéro de suivi facture : <strong>{invoice_number}</strong></p>
+      <p>Convention désormais : <strong>EW-B2B-[CLIENT]-[ANNÉE]-0001</strong>, puis incrémentation 0002, 0003… par client B2B.</p>
+    </section>
+    <section class="card" style="padding:18px; margin-bottom:16px;">
+      <h2>Fichiers Hertz</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:1.2fr .6fr .5fr .45fr;"><span>Fichier</span><span>Modifié</span><span>Taille</span><span>Action</span></div>
+        {file_rows}
+      </div>
+    </section>
+    <section class="card" style="padding:18px;">
+      <h2>Consultation des véhicules</h2>
+      <div class="table-shell">
+        <div class="table-row table-head" style="grid-template-columns:.55fr .75fr 1.25fr .8fr .45fr .7fr;"><span>Date</span><span>Site</span><span>Voiture</span><span>Matricule</span><span>HT</span><span>Notes</span></div>
+        {table_rows}
+      </div>
+    </section>
+    """
+    return HTMLResponse(content=_layout(locale=locale, title=title, body=body, active_path="/admin/b2b"))
 
 
 def _tracking_page(*, locale: str) -> HTMLResponse:
@@ -1720,6 +1921,71 @@ async def admin_payroll_receipt(request: Request, filename: str, lang: str | Non
     return FileResponse(path)
 
 
+@router.get("/b2b/hertz", response_class=HTMLResponse)
+async def admin_b2b_hertz(request: Request, lang: str | None = Query(default=None)) -> HTMLResponse:
+    locale = normalize_locale(lang or settings.admin_default_locale)
+    if not settings.admin_password:
+        title = t("admin.not_configured.title", locale)
+        body = f"<h1>{escape(title)}</h1><p>{escape(t('admin.not_configured.body', locale))}</p>"
+        return HTMLResponse(
+            content=_layout(locale=locale, title=title, body=body, active_path="/admin/b2b"),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if not _valid_session_token(request.cookies.get(_SESSION_COOKIE)):
+        return _password_form(locale=locale)
+    return _b2b_hertz_page(locale=locale)
+
+
+@router.get("/b2b/hertz/files/{filename}")
+async def admin_b2b_hertz_file(request: Request, filename: str, lang: str | None = Query(default=None)):
+    locale = normalize_locale(lang or settings.admin_default_locale)
+    if not settings.admin_password:
+        return RedirectResponse(url=f"/admin?lang={locale}", status_code=status.HTTP_303_SEE_OTHER)
+    if not _valid_session_token(request.cookies.get(_SESSION_COOKIE)):
+        return _password_form(locale=locale)
+
+    safe_name = _safe_b2b_hertz_filename(filename)
+    if not safe_name:
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    engine = _configured_engine()
+    if engine is not None:
+        with session_scope(engine) as session:
+            row = None
+            direct_key = f"{_B2B_HERTZ_FILE_TEXT_PREFIX}{safe_name}"
+            if len(direct_key) <= 80:
+                row = session.get(AdminTextRow, direct_key)
+            if row is None:
+                candidates = session.scalars(
+                    select(AdminTextRow).where(AdminTextRow.text_key.like(f"{_B2B_HERTZ_FILE_TEXT_PREFIX}%"))
+                ).all()
+                for candidate in candidates:
+                    candidate_payload = _json_payload(candidate)
+                    if candidate_payload.get("filename") == safe_name:
+                        row = candidate
+                        break
+            payload = _json_payload(row)
+        encoded_file = payload.get("content_base64")
+        media_type = str(payload.get("content_type") or "application/octet-stream")
+        if isinstance(encoded_file, str) and encoded_file:
+            try:
+                content = base64.b64decode(encoded_file, validate=True)
+            except Exception:
+                content = b""
+            if content:
+                return Response(
+                    content=content,
+                    media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+                )
+
+    path = (_B2B_HERTZ_DIR / safe_name).resolve()
+    hertz_root = _B2B_HERTZ_DIR.resolve()
+    if path.parent != hertz_root or not path.is_file():
+        return HTMLResponse(content="Not found", status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(path, filename=path.name)
+
+
 @router.get("/personal-finances/files/{filename}")
 async def admin_personal_finance_file(request: Request, filename: str, lang: str | None = Query(default=None)):
     locale = normalize_locale(lang or settings.admin_default_locale)
@@ -1793,6 +2059,8 @@ async def admin_section(request: Request, page_slug: str, lang: str | None = Que
         if erased is not None:
             message = t("admin.customers.erased", locale).format(count=erased)
         return _customers_page(locale=locale, message=message, error=error)
+    if page_id == "b2b":
+        return _b2b_page(locale=locale)
     if page_id == "payroll":
         return _payroll_page(locale=locale)
     if page_id == "tracking":

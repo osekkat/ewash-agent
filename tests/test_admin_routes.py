@@ -227,6 +227,55 @@ def test_admin_personal_finances_page_lists_and_serves_db_workbook(monkeypatch, 
     assert download.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
+def test_admin_b2b_hertz_page_lists_files_and_vehicle_rows(monkeypatch, tmp_path):
+    hertz_dir = tmp_path / "hertz" / "final"
+    hertz_dir.mkdir(parents=True)
+    workbook = hertz_dir / "SUIVI_HERTZ_CASA_21_Mai_au_20_Juin_2026_Ewash.xlsx"
+    workbook.write_bytes(b"fake hertz workbook")
+    payload = {
+        "summary": {
+            "invoice_number": "EW-B2B-HERTZ-2026-0001",
+            "total_vehicles": 2,
+            "by_site": {"Casa Aéroport": 1, "Fès Aéroport": 1},
+            "total_ht": 100,
+            "tva": 20,
+            "ttc": 120,
+        },
+        "rows": [
+            {"date": "2026-06-20", "site": "Casa Aéroport", "vehicle": "Kia Carnival noir", "matricule": "2942 Y 6", "tarif_ht": 50},
+            {"date": "2026-06-20", "site": "Fès Aéroport", "vehicle": "Renault Clio grise", "matricule": "27048 Y 6", "tarif_ht": 50},
+        ],
+    }
+    (hertz_dir / "hertz_b2b_2026-05-21_2026-06-20.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(admin_module, "_B2B_HERTZ_DIR", hertz_dir)
+    monkeypatch.setattr(settings, "admin_password", "secret-pass")
+    client = TestClient(app)
+    client.post(
+        "/admin",
+        content="password=secret-pass",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    b2b = client.get("/admin/b2b")
+    assert b2b.status_code == 200
+    assert "B2B" in b2b.text
+    assert "Hertz" in b2b.text
+    assert "/admin/b2b/hertz" in b2b.text
+
+    page = client.get("/admin/b2b/hertz")
+    assert page.status_code == 200
+    assert "Suivi Hertz" in page.text
+    assert "EW-B2B-HERTZ-2026-0001" in page.text
+    assert "Kia Carnival noir" in page.text
+    assert "2942 Y 6" in page.text
+    assert workbook.name in page.text
+
+    download = client.get(f"/admin/b2b/hertz/files/{workbook.name}")
+    assert download.status_code == 200
+    assert download.content == b"fake hertz workbook"
+
+
+
 def _sample_booking() -> Booking:
     booking = Booking(phone="212665883062")
     booking.name = "Sekkat"
